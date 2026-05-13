@@ -55,10 +55,37 @@ providers:
     api_key: ${OPENROUTER_API_KEY}
     # models discovered dynamically from /v1/models
 
-  opencode:
+  # OpenCode Go — single subscription that routes to 12 open-source
+  # coding models. The catch: only 2 of them (MiniMax M2.5/M2.7) expose
+  # the Anthropic Messages format. The other 10 (GLM, Kimi, DeepSeek V4,
+  # MiMo, Qwen) live behind /v1/chat/completions and need the Phase-3
+  # translation layer. Hence two provider entries sharing the same
+  # subscription key.
+
+  opencode-go-anthropic:
     type: anthropic_compatible
-    url: https://your-opencode-endpoint.example.com
-    api_key: ${OPENCODE_API_KEY}
+    url: https://opencode.ai/zen/go
+    api_key: ${OPENCODE_GO_API_KEY}
+    models:
+      - minimax-m2.7
+      - minimax-m2.5
+
+  opencode-go-openai:
+    # Usable once Phase 3 (translation Anthropic ↔ OpenAI) lands.
+    type: openai_compatible
+    url: https://opencode.ai/zen/go
+    api_key: ${OPENCODE_GO_API_KEY}
+    models:
+      - glm-5.1
+      - glm-5
+      - kimi-k2.6
+      - kimi-k2.5
+      - deepseek-v4-pro
+      - deepseek-v4-flash
+      - mimo-v2.5
+      - mimo-v2.5-pro
+      - qwen3.6-plus
+      - qwen3.5-plus
 
   custom-openai:
     type: openai_compatible
@@ -90,9 +117,15 @@ routes:
   - models: ["openrouter/*", "*/*"]
     provider: openrouter
 
-  # OpenCode custom endpoint
-  - models: ["opencode-*"]
-    provider: opencode
+  # OpenCode Go — MiniMax through the native Anthropic endpoint.
+  - models: ["minimax-*"]
+    provider: opencode-go-anthropic
+
+  # OpenCode Go — every other model goes through the OpenAI endpoint
+  # (needs Phase 3 translation; routes will start working once that lands).
+  - models:
+      ["glm-*", "kimi-*", "deepseek-v4-*", "mimo-*", "qwen3*"]
+    provider: opencode-go-openai
 
   # OpenAI families (with translation layer)
   - models: ["gpt-*", "o1-*", "o3-*", "o4-*"]
