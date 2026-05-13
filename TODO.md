@@ -23,8 +23,8 @@ Marca cada tarea al completarla y commitea junto al cambio. El detalle técnico 
 - [x] **T1.1** `src/config.rs`: definir structs `Config`, `Provider`, `ProviderType`, `Route`. Implementar `Config::load(path)` con expansión de `${ENV_VAR}` en cualquier campo string (incluido `api_key`).
   - Validación: `route.provider` debe referenciar un provider existente; `route.models` no puede estar vacío; ambos fallan al cargar.
   - 4 unit tests cubriendo: carga minimal, expansión de env vars, provider desconocido, models vacío.
-- [ ] **T1.2** `src/cli.rs`: subcomando `run --config <path>` (resto de comandos quedan stub para Phase 4)
-- [ ] **T1.3** `src/main.rs`: parse args con `clap`, init tracing-subscriber, despacha a `cli::run()`
+- [x] **T1.2** `src/cli.rs`: subcomando `run --config <path>` funcional + stubs claros para `start`/`stop`/`status`/`logs`/`config-validate` (estos retornan "Phase 4 — not implemented yet"). Soporte de `~` con `shellexpand::tilde`. 3 unit tests (clap valid, run parsing, stubs error).
+- [x] **T1.3** `src/main.rs`: `#[tokio::main]` multi-thread, init `tracing-subscriber` con `EnvFilter` (default: `open_interceptor=info,tower_http=warn,reqwest=warn,hyper=warn`, override con `RUST_LOG`). Dispatch a `cli::dispatch()` y print de error chain via `anyhow` Debug.
 - [ ] **T1.4** `src/router.rs`: struct `Router` con `GlobSetBuilder` pre-compilado al cargar. Método `resolve(model: &str) -> Option<&Provider>` itera rutas en orden.
   - Soportar `remap: HashMap<String, String>` por ruta para reescribir el `model` antes de despachar al provider.
 - [ ] **T1.5** `src/proxy.rs`: servidor Axum con `axum::Router::new()` y handler `POST /v1/messages`. Bufferizar body, parsear `model`, llamar al router.

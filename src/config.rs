@@ -89,24 +89,59 @@ fn default_log_level() -> String {
     "info".to_string()
 }
 
+/// Walk a YAML `Value` tree and expand `${ENV_VAR}` inside every string
+/// scalar (mapping values, sequence items, nested structures). Mapping
+/// keys are intentionally left alone — they're identifiers, not config.
+fn expand_env_in_strings(value: &mut serde_yml::Value) -> Result<(), ConfigError> {
+    use serde_yml::Value;
+    match value {
+        Value::String(s) => {
+            let expanded =
+                shellexpand::env(s).map_err(|e| ConfigError::EnvExpansion(e.to_string()))?;
+            // Avoid allocating when nothing changed.
+            if expanded.as_ref() != s.as_str() {
+                *s = expanded.into_owned();
+            }
+        }
+        Value::Sequence(items) => {
+            for item in items {
+                expand_env_in_strings(item)?;
+            }
+        }
+        Value::Mapping(map) => {
+            for (_k, v) in map.iter_mut() {
+                expand_env_in_strings(v)?;
+            }
+        }
+        // Null, Bool, Number, Tagged — no strings to expand.
+        _ => {}
+    }
+    Ok(())
+}
+
 impl Config {
     /// Read and validate a config file from disk.
     ///
     /// 1. Read the file as UTF-8.
-    /// 2. Expand `${ENV_VAR}` placeholders via `shellexpand::env`.
-    /// 3. Parse as YAML.
-    /// 4. Validate that every `route.provider` references a known
-    ///    provider in `providers`.
+    /// 2. Parse as YAML into a generic `Value` tree.
+    /// 3. Walk that tree and expand `${ENV_VAR}` placeholders only inside
+    ///    string scalars. This deliberately skips comments (already
+    ///    stripped by the parser) and YAML keys, so e.g. a comment
+    ///    documenting "use `${VAR}` syntax for api keys" doesn't break
+    ///    the loader.
+    /// 4. Deserialize the (now-expanded) tree into `Config`.
+    /// 5. Validate that every `route.provider` references a known
+    ///    provider in `providers` and that no route has empty patterns.
     pub fn load(path: &Path) -> Result<Self, ConfigError> {
         let raw = std::fs::read_to_string(path).map_err(|source| ConfigError::Io {
             path: path.to_path_buf(),
             source,
         })?;
 
-        let expanded =
-            shellexpand::env(&raw).map_err(|e| ConfigError::EnvExpansion(e.to_string()))?;
+        let mut value: serde_yml::Value = serde_yml::from_str(&raw)?;
+        expand_env_in_strings(&mut value)?;
 
-        let config: Config = serde_yml::from_str(&expanded)?;
+        let config: Config = serde_yml::from_value(value)?;
         config.validate()?;
         Ok(config)
     }
@@ -224,6 +259,47 @@ routes:
                 assert_eq!(provider, "does-not-exist");
             }
             other => panic!("expected UnknownProvider, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn comments_with_dollar_var_dont_break_loading() {
+        // Comments are stripped by the YAML parser, so a `${VAR}` inside
+        // a comment must never reach shellexpand.
+        let yaml = r#"
+# Environment variables in api_key fields are expanded with shell syntax: ${VAR}
+providers:
+  p:
+    type: anthropic_compatible
+    url: https://example.com
+    passthrough_auth: true
+routes:
+  - models: ["*"]
+    provider: p
+"#;
+        let f = write_tmp(yaml);
+        let cfg = Config::load(f.path()).expect("comment with ${VAR} should be harmless");
+        assert!(cfg.providers["p"].passthrough_auth);
+    }
+
+    #[test]
+    fn unresolved_env_var_in_value_is_an_error() {
+        // Conversely, a real ${VAR} reference in an actual config value
+        // must fail loudly so the user knows their secret is missing.
+        let yaml = r#"
+providers:
+  p:
+    type: anthropic_compatible
+    url: https://example.com
+    api_key: ${OPEN_INTERCEPTOR_DEFINITELY_UNSET_VAR_XYZ}
+routes:
+  - models: ["*"]
+    provider: p
+"#;
+        let f = write_tmp(yaml);
+        match Config::load(f.path()) {
+            Err(ConfigError::EnvExpansion(_)) => {}
+            other => panic!("expected EnvExpansion error, got {other:?}"),
         }
     }
 
