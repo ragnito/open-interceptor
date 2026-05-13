@@ -8,6 +8,30 @@ Set `ANTHROPIC_BASE_URL=http://127.0.0.1:3300` once, then switch providers from 
 
 **Alpha — under active development.** See [TODO.md](./TODO.md) for the implementation roadmap.
 
+## What makes this different
+
+There are already several similar projects ([claude-code-router](https://github.com/musistudio/claude-code-router), [anthropic-proxy-rs](https://github.com/m0n0x41d/anthropic-proxy-rs), [litellm](https://docs.litellm.ai/), etc.). The one feature `open-interceptor` is being built to support that **none of them offer cleanly today** is:
+
+> **OAuth subscription pass-through.** When the request targets an Anthropic model, the proxy forwards your Claude Code OAuth token unchanged to `api.anthropic.com` — so you keep using your **Pro / Max subscription**, not API credits. When the request targets DeepSeek / OpenAI / OpenRouter / etc., the proxy substitutes the configured API key for that provider.
+
+This means a single `/model` switch inside Claude Code can move you between your subscription and pay-per-token providers without re-authenticating or restarting.
+
+## ⚠️ Risk: Anthropic Terms of Service
+
+Anthropic's policy (updated February 2026) prohibits the use of **OAuth tokens from Free / Pro / Max subscriptions** in any product, tool, or service other than the official Claude Code CLI and Claude.ai. The first enforcement case was a personal usage-tracker app — non-commercial use does **not** automatically exempt you.
+
+`open-interceptor` is designed to run **locally on your own machine, for your own requests only**. Under that constraint, the proxy is effectively invisible to Anthropic (same User-Agent, same headers, same TLS endpoint) and is in the same defensible gray zone as any local debugging tool that observes your traffic. But that's a gray zone, not a green light.
+
+**Do not** use this proxy to:
+
+- Share your subscription token with other users
+- Route requests through it from machines that aren't yours
+- Build a commercial product on top of it that uses subscription auth
+
+If you do any of the above, switch the `anthropic` provider in your config from `passthrough_auth: true` to a real API key. Anthropic publishes API credits for exactly this case.
+
+Use of this software is **at your own risk**. The maintainers do not encourage or condone violation of any provider's terms of service.
+
 ## Why Rust
 
 - Streaming SSE chunk-by-chunk with minimal buffering
