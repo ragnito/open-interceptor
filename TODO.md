@@ -20,8 +20,9 @@ Marca cada tarea al completarla y commitea junto al cambio. El detalle técnico 
 
 ## Phase 1 — Core proxy + ruteo Anthropic-compatible (semana 1)
 
-- [ ] **T1.1** `src/config.rs`: definir structs `Config`, `Provider`, `ProviderType`, `Route`. Implementar `Config::load(path)` con expansión de `${ENV_VAR}` en `api_key`.
-  - Validar que cada `route.provider` referencia un provider existente; fallar al cargar si no.
+- [x] **T1.1** `src/config.rs`: definir structs `Config`, `Provider`, `ProviderType`, `Route`. Implementar `Config::load(path)` con expansión de `${ENV_VAR}` en cualquier campo string (incluido `api_key`).
+  - Validación: `route.provider` debe referenciar un provider existente; `route.models` no puede estar vacío; ambos fallan al cargar.
+  - 4 unit tests cubriendo: carga minimal, expansión de env vars, provider desconocido, models vacío.
 - [ ] **T1.2** `src/cli.rs`: subcomando `run --config <path>` (resto de comandos quedan stub para Phase 4)
 - [ ] **T1.3** `src/main.rs`: parse args con `clap`, init tracing-subscriber, despacha a `cli::run()`
 - [ ] **T1.4** `src/router.rs`: struct `Router` con `GlobSetBuilder` pre-compilado al cargar. Método `resolve(model: &str) -> Option<&Provider>` itera rutas en orden.
