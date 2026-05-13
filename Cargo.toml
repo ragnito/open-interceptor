@@ -2,5 +2,33 @@
 name = "open-interceptor"
 version = "0.1.0"
 edition = "2024"
+description = "Local proxy that intercepts Claude Code traffic and auto-routes to Anthropic/OpenAI-compatible providers"
+license = "MIT"
+repository = "https://github.com/ragnito/open-interceptor"
 
 [dependencies]
+anyhow = "1.0.102"
+axum = "0.8.9"
+clap = { version = "4.6.1", features = ["derive"] }
+eventsource-stream = "0.2.3"
+futures = "0.3.32"
+globset = "0.4.18"
+hyper = { version = "1.9.0", features = ["full"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "json"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+serde_yml = "0.0.12"
+shellexpand = "3.1.2"
+thiserror = "2.0.18"
+tokio = { version = "1.52.3", features = ["full"] }
+tokio-util = { version = "0.7.18", features = ["rt"] }
+tracing = "0.1.44"
+tracing-appender = "0.2.5"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+strip = true
+opt-level = 3
+panic = "abort"
