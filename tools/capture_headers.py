@@ -52,6 +52,11 @@ def sse_event(event: str, data: dict) -> bytes:
 
 
 class Handler(BaseHTTPRequestHandler):
+    # http.server buffers writes by default, which breaks SSE — the
+    # client sees no bytes until the handler returns. Setting wbufsize=0
+    # makes self.wfile unbuffered so each `write()` reaches the socket.
+    wbufsize = 0
+
     def log_message(self, fmt, *args):
         # Silence default access log; we print our own.
         pass
@@ -143,7 +148,10 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-cache")
-        self.send_header("Connection", "keep-alive")
+        # Force connection close at end so curl/clients know the response
+        # is over once we stop writing. Without this, http.server keeps
+        # the socket alive and clients hang waiting for more bytes.
+        self.send_header("Connection", "close")
         self.end_headers()
 
         events = [

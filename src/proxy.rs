@@ -22,6 +22,8 @@ use axum::{
 use serde_json::json;
 use tokio::net::TcpListener;
 
+use crate::config::ProviderType;
+use crate::providers;
 use crate::router::Router;
 
 /// Bind the listener and run the HTTP server until cancelled.
@@ -62,7 +64,7 @@ async fn handle_messages(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    dispatch(router, method, uri, headers, body, "/v1/messages").await
+    dispatch(router, method, uri, headers, body).await
 }
 
 async fn handle_count_tokens(
@@ -72,7 +74,7 @@ async fn handle_count_tokens(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    dispatch(router, method, uri, headers, body, "/v1/messages/count_tokens").await
+    dispatch(router, method, uri, headers, body).await
 }
 
 /// Stub for the /v1/models endpoint. Returns the union of every provider's
@@ -98,18 +100,18 @@ async fn dispatch(
     router: Arc<Router>,
     method: Method,
     uri: Uri,
-    _headers: HeaderMap,
+    headers: HeaderMap,
     body: Bytes,
-    endpoint: &'static str,
 ) -> Response {
     let start = std::time::Instant::now();
+    let endpoint = uri.path().to_string();
 
     // Parse just enough of the body to get the model id. The full body
     // continues opaque so we can forward it byte-for-byte upstream.
     let model = match extract_model(&body) {
         Ok(m) => m,
         Err(e) => {
-            tracing::warn!(error = %e, endpoint, "rejecting request with unparseable body");
+            tracing::warn!(error = %e, endpoint = %endpoint, "rejecting request with unparseable body");
             return anthropic_error(
                 StatusCode::BAD_REQUEST,
                 "invalid_request_error",
@@ -121,7 +123,7 @@ async fn dispatch(
     let resolution = match router.resolve(&model) {
         Some(r) => r,
         None => {
-            tracing::warn!(model = %model, endpoint, "no route matches");
+            tracing::warn!(model = %model, endpoint = %endpoint, "no route matches");
             return anthropic_error(
                 StatusCode::NOT_FOUND,
                 "not_found_error",
@@ -130,31 +132,91 @@ async fn dispatch(
         }
     };
 
-    tracing::info!(
-        method = %method,
-        path = uri.path(),
-        endpoint,
-        model = %model,
-        effective_model = %resolution.effective_model,
-        provider = %resolution.provider_name,
-        provider_type = ?resolution.provider.provider_type,
-        passthrough_auth = resolution.provider.passthrough_auth,
-        body_bytes = body.len(),
-        elapsed_us = start.elapsed().as_micros() as u64,
-        "dispatch",
-    );
+    let provider_name = resolution.provider_name.to_string();
+    let provider_type = resolution.provider.provider_type;
+    let passthrough_auth = resolution.provider.passthrough_auth;
+    let effective_model = resolution.effective_model.clone();
+    let body_bytes = body.len();
 
-    // T1.7 will replace this with:
-    //   crate::providers::anthropic::forward(...).await
-    // depending on resolution.provider.provider_type.
-    anthropic_error(
-        StatusCode::NOT_IMPLEMENTED,
-        "not_implemented",
-        &format!(
-            "open-interceptor: provider `{}` dispatch not yet implemented (T1.7)",
-            resolution.provider_name
-        ),
-    )
+    let result = match provider_type {
+        ProviderType::AnthropicCompatible => {
+            providers::anthropic::forward(
+                resolution.provider,
+                &model,
+                &effective_model,
+                method.clone(),
+                uri.clone(),
+                headers,
+                body,
+            )
+            .await
+        }
+        ProviderType::OpenaiCompatible => {
+            return anthropic_error(
+                StatusCode::NOT_IMPLEMENTED,
+                "not_implemented",
+                "openai_compatible providers require the translation layer from Phase 3",
+            );
+        }
+        ProviderType::Passthrough => {
+            return anthropic_error(
+                StatusCode::NOT_IMPLEMENTED,
+                "not_implemented",
+                "passthrough provider type not implemented yet",
+            );
+        }
+    };
+
+    let elapsed_ms = start.elapsed().as_millis() as u64;
+
+    match result {
+        Ok(response) => {
+            tracing::info!(
+                method = %method,
+                path = %endpoint,
+                model = %model,
+                effective_model = %effective_model,
+                provider = %provider_name,
+                provider_type = ?provider_type,
+                passthrough_auth,
+                body_bytes,
+                upstream_status = response.status().as_u16(),
+                elapsed_ms,
+                "dispatch ok",
+            );
+            response
+        }
+        Err(err) => {
+            tracing::error!(
+                method = %method,
+                path = %endpoint,
+                model = %model,
+                provider = %provider_name,
+                error = %err,
+                elapsed_ms,
+                "dispatch failed",
+            );
+            // Map provider errors to Anthropic-shaped 502s so the client
+            // sees a meaningful payload instead of a transport failure.
+            match err {
+                providers::anthropic::ForwardError::Upstream(e) => anthropic_error(
+                    StatusCode::BAD_GATEWAY,
+                    "api_error",
+                    &format!("upstream provider `{provider_name}` failed: {e}"),
+                ),
+                providers::anthropic::ForwardError::MissingApiKey => anthropic_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "config_error",
+                    &format!("provider `{provider_name}` has neither passthrough_auth nor api_key"),
+                ),
+                other => anthropic_error(
+                    StatusCode::BAD_GATEWAY,
+                    "api_error",
+                    &format!("forwarding to `{provider_name}` failed: {other}"),
+                ),
+            }
+        }
+    }
 }
 
 /// Pull only the `model` field from a JSON body. Tolerant of extra fields

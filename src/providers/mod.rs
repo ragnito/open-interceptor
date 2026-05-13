@@ -1,4 +1,7 @@
 // Provider implementations.
 //
-// Populated in Phase 1 (anthropic-compatible passthrough) and Phase 3
-// (openai-compatible with translation layer).
+// `anthropic` handles every upstream that speaks the Anthropic Messages
+// API natively (Anthropic, DeepSeek's /anthropic, OpenRouter's Anthropic
+// endpoint, etc.). `openai` and `passthrough` arrive in later phases.
+
+pub mod anthropic;
