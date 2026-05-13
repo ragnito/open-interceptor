@@ -1,0 +1,21 @@
+---
+source: src/translate/resp_openai_to_anthropic.rs
+expression: out
+---
+{
+  "id": "chatcmpl-test",
+  "type": "message",
+  "role": "assistant",
+  "content": [
+    {
+      "type": "text",
+      "text": "The capital of France is Paris."
+    }
+  ],
+  "model": "test-model",
+  "stop_reason": "end_turn",
+  "usage": {
+    "input_tokens": 10,
+    "output_tokens": 5
+  }
+}

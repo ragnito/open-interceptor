@@ -1,0 +1,9 @@
+---
+source: src/translate/sse_stream.rs
+expression: wire
+---
+[
+  "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":1}",
+  "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\",\"stop_sequence\":null},\"usage\":{\"input_tokens\":120,\"output_tokens\":35}}",
+  "event: message_stop\ndata: {\"type\":\"message_stop\"}"
+]

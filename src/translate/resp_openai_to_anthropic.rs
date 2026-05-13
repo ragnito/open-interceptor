@@ -18,13 +18,21 @@ pub fn convert_non_streaming(resp: &o::ChatCompletionResponse) -> a::MessagesRes
     let mut content: Vec<a::ContentBlock> = Vec::new();
 
     if let Some(msg) = assistant {
-        if let Some(text) = &msg.content {
-            if !text.is_empty() {
-                content.push(a::ContentBlock::Text {
-                    text: text.clone(),
-                    cache_control: None,
-                });
-            }
+        if let Some(reasoning) = &msg.reasoning_content
+            && !reasoning.is_empty()
+        {
+            content.push(a::ContentBlock::Thinking {
+                thinking: reasoning.clone(),
+                signature: None,
+            });
+        }
+        if let Some(text) = &msg.content
+            && !text.is_empty()
+        {
+            content.push(a::ContentBlock::Text {
+                text: text.clone(),
+                cache_control: None,
+            });
         }
         for tc in &msg.tool_calls {
             let input = parse_function_arguments(&tc.function.arguments);
@@ -88,7 +96,11 @@ fn parse_function_arguments(args: &str) -> Value {
 mod tests {
     use super::*;
 
-    fn openai_resp(content: Option<&str>, tool_calls: Vec<o::ToolCall>, finish: o::FinishReason) -> o::ChatCompletionResponse {
+    fn openai_resp(
+        content: Option<&str>,
+        tool_calls: Vec<o::ToolCall>,
+        finish: o::FinishReason,
+    ) -> o::ChatCompletionResponse {
         o::ChatCompletionResponse {
             id: "chatcmpl-test".into(),
             object: "chat.completion".into(),
@@ -100,6 +112,7 @@ mod tests {
                     role: Some("assistant".into()),
                     content: content.map(String::from),
                     tool_calls,
+                    reasoning_content: None,
                 },
                 finish_reason: Some(finish),
             }],
@@ -232,6 +245,63 @@ mod tests {
         let out = convert_non_streaming(&resp);
         assert_eq!(out.usage.input_tokens, 0);
         assert_eq!(out.usage.output_tokens, 0);
+    }
+
+    #[test]
+    fn snapshot_text_response() {
+        let resp = openai_resp(
+            Some("The capital of France is Paris."),
+            vec![],
+            o::FinishReason::Stop,
+        );
+        let out = convert_non_streaming(&resp);
+        insta::assert_json_snapshot!(out);
+    }
+
+    #[test]
+    fn snapshot_tool_call_response() {
+        let resp = openai_resp(
+            Some("Let me check the file."),
+            vec![o::ToolCall {
+                id: "call_abc123".into(),
+                call_type: "function".into(),
+                function: o::FunctionCall {
+                    name: "Read".into(),
+                    arguments: r#"{"file_path":"/tmp/config.json"}"#.into(),
+                },
+            }],
+            o::FinishReason::ToolCalls,
+        );
+        let out = convert_non_streaming(&resp);
+        insta::assert_json_snapshot!(out);
+    }
+
+    #[test]
+    fn snapshot_multiple_tool_calls() {
+        let resp = openai_resp(
+            None,
+            vec![
+                o::ToolCall {
+                    id: "call_1".into(),
+                    call_type: "function".into(),
+                    function: o::FunctionCall {
+                        name: "Read".into(),
+                        arguments: r#"{"file_path":"/tmp/a.txt"}"#.into(),
+                    },
+                },
+                o::ToolCall {
+                    id: "call_2".into(),
+                    call_type: "function".into(),
+                    function: o::FunctionCall {
+                        name: "Write".into(),
+                        arguments: r#"{"file_path":"/tmp/out.txt","content":"ok"}"#.into(),
+                    },
+                },
+            ],
+            o::FinishReason::ToolCalls,
+        );
+        let out = convert_non_streaming(&resp);
+        insta::assert_json_snapshot!(out);
     }
 
     #[test]

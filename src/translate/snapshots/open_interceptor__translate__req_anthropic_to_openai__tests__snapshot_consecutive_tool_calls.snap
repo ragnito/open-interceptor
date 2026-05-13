@@ -1,0 +1,32 @@
+---
+source: src/translate/req_anthropic_to_openai.rs
+expression: out
+---
+{
+  "model": "x",
+  "messages": [
+    {
+      "role": "assistant",
+      "content": "I'll read both.",
+      "tool_calls": [
+        {
+          "id": "toolu_1",
+          "type": "function",
+          "function": {
+            "name": "Read",
+            "arguments": "[tool arguments]"
+          }
+        },
+        {
+          "id": "toolu_2",
+          "type": "function",
+          "function": {
+            "name": "Read",
+            "arguments": "[tool arguments]"
+          }
+        }
+      ]
+    }
+  ],
+  "max_tokens": 100
+}

@@ -103,6 +103,7 @@ fn translate_message(msg: &a::Message, out: &mut Vec<o::ChatMessage>) {
                 a::Role::Assistant => out.push(o::ChatMessage::Assistant {
                     content: Some(t.clone()),
                     tool_calls: vec![],
+                    reasoning_content: None,
                 }),
             }
             return;
@@ -179,6 +180,7 @@ fn translate_user_blocks(blocks: &[&a::ContentBlock], out: &mut Vec<o::ChatMessa
 fn translate_assistant_blocks(blocks: &[&a::ContentBlock], out: &mut Vec<o::ChatMessage>) {
     let mut text_parts: Vec<String> = Vec::new();
     let mut tool_calls: Vec<o::ToolCall> = Vec::new();
+    let mut reasoning_content: Option<String> = None;
 
     for block in blocks {
         match block {
@@ -194,9 +196,21 @@ fn translate_assistant_blocks(blocks: &[&a::ContentBlock], out: &mut Vec<o::Chat
                     },
                 });
             }
-            // Thinking blocks: OpenAI has no equivalent → drop.
-            a::ContentBlock::Thinking { .. } | a::ContentBlock::RedactedThinking { .. } => {}
-            // tool_result / image shouldn't appear in assistant messages.
+            // Thinking blocks → reasoning_content (needed by DeepSeek V4 etc.)
+            a::ContentBlock::Thinking { thinking, .. } => {
+                tracing::debug!(
+                    reasoning_len = thinking.len(),
+                    "request translator: Thinking block → reasoning_content",
+                );
+                reasoning_content = Some(thinking.clone());
+            }
+            a::ContentBlock::RedactedThinking { data } => {
+                tracing::debug!(
+                    redacted_len = data.len(),
+                    "request translator: RedactedThinking → reasoning_content (redacted marker)",
+                );
+                reasoning_content = Some(format!("[redacted: {data}]"));
+            }
             _ => {}
         }
     }
@@ -210,6 +224,7 @@ fn translate_assistant_blocks(blocks: &[&a::ContentBlock], out: &mut Vec<o::Chat
     out.push(o::ChatMessage::Assistant {
         content,
         tool_calls,
+        reasoning_content,
     });
 }
 
@@ -300,22 +315,20 @@ mod tests {
             model: "x".into(),
             max_tokens: 100,
             system: None,
-            messages: vec![
-                a::Message {
-                    role: a::Role::Assistant,
-                    content: a::MessageContent::Blocks(vec![
-                        a::ContentBlock::Text {
-                            text: "let me check".into(),
-                            cache_control: None,
-                        },
-                        a::ContentBlock::ToolUse {
-                            id: "toolu_1".into(),
-                            name: "Read".into(),
-                            input: json!({"path": "/tmp/a"}),
-                        },
-                    ]),
-                },
-            ],
+            messages: vec![a::Message {
+                role: a::Role::Assistant,
+                content: a::MessageContent::Blocks(vec![
+                    a::ContentBlock::Text {
+                        text: "let me check".into(),
+                        cache_control: None,
+                    },
+                    a::ContentBlock::ToolUse {
+                        id: "toolu_1".into(),
+                        name: "Read".into(),
+                        input: json!({"path": "/tmp/a"}),
+                    },
+                ]),
+            }],
             tools: vec![],
             tool_choice: None,
             temperature: None,
@@ -332,6 +345,7 @@ mod tests {
             o::ChatMessage::Assistant {
                 content,
                 tool_calls,
+                ..
             } => {
                 assert_eq!(content.as_deref(), Some("let me check"));
                 assert_eq!(tool_calls.len(), 1);
@@ -459,6 +473,7 @@ mod tests {
             o::ChatMessage::Assistant {
                 content,
                 tool_calls,
+                ..
             } => {
                 assert_eq!(content.as_deref(), Some("visible answer"));
                 assert!(tool_calls.is_empty());
@@ -491,7 +506,10 @@ mod tests {
         let out = convert(&req);
         assert_eq!(out.tools.len(), 1);
         assert_eq!(out.tools[0].function.name, "Read");
-        assert_eq!(out.tools[0].function.description.as_deref(), Some("Read a file"));
+        assert_eq!(
+            out.tools[0].function.description.as_deref(),
+            Some("Read a file")
+        );
         assert_eq!(out.tools[0].function.parameters["type"], "object");
     }
 
@@ -550,5 +568,126 @@ mod tests {
             Some(o::StopValue::Many(v)) => assert_eq!(v.len(), 2),
             other => panic!("expected Many, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn snapshot_complex_conversation_with_tools() {
+        let req = a::MessagesRequest {
+            model: "claude-opus-4-7".into(),
+            max_tokens: 4096,
+            system: Some(a::SystemPrompt::Text(
+                "You are Claude Code, an AI coding assistant.".into(),
+            )),
+            messages: vec![
+                a::Message {
+                    role: a::Role::User,
+                    content: a::MessageContent::Text("read /tmp/config.json".into()),
+                },
+                a::Message {
+                    role: a::Role::Assistant,
+                    content: a::MessageContent::Blocks(vec![
+                        a::ContentBlock::Text {
+                            text: "Let me read that.".into(),
+                            cache_control: None,
+                        },
+                        a::ContentBlock::ToolUse {
+                            id: "toolu_01Xabc".into(),
+                            name: "Read".into(),
+                            input: json!({"file_path": "/tmp/config.json"}),
+                        },
+                    ]),
+                },
+                a::Message {
+                    role: a::Role::User,
+                    content: a::MessageContent::Blocks(vec![a::ContentBlock::ToolResult {
+                        tool_use_id: "toolu_01Xabc".into(),
+                        content: a::ToolResultContent::Text("{\"host\": \"localhost\"}".into()),
+                        is_error: None,
+                    }]),
+                },
+            ],
+            tools: vec![a::Tool {
+                name: "Read".into(),
+                description: Some("Reads a file".into()),
+                input_schema: json!({"type":"object","properties":{"file_path":{"type":"string"}},"required":["file_path"]}),
+            }],
+            tool_choice: Some(a::ToolChoice::Auto),
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            stream: Some(true),
+            stop_sequences: vec!["END".into()],
+            metadata: Some(json!({"user_id": "user_abc"})),
+            thinking: Some(json!({"type": "enabled", "budget_tokens": 1024})),
+        };
+        let out = convert(&req);
+        insta::assert_json_snapshot!(out, {
+            ".messages[].tool_calls[].function.arguments" => "[tool arguments]",
+        });
+    }
+
+    #[test]
+    fn snapshot_minimal_text_only() {
+        let req = a::MessagesRequest {
+            model: "claude-sonnet-4-6".into(),
+            max_tokens: 1024,
+            system: None,
+            messages: vec![a::Message {
+                role: a::Role::User,
+                content: a::MessageContent::Text("What is Rust?".into()),
+            }],
+            tools: vec![],
+            tool_choice: None,
+            temperature: Some(0.7),
+            top_p: Some(0.9),
+            top_k: None,
+            stream: Some(false),
+            stop_sequences: vec![],
+            metadata: None,
+            thinking: None,
+        };
+        let out = convert(&req);
+        insta::assert_json_snapshot!(out);
+    }
+
+    #[test]
+    fn snapshot_consecutive_tool_calls() {
+        let req = a::MessagesRequest {
+            model: "x".into(),
+            max_tokens: 100,
+            system: None,
+            messages: vec![a::Message {
+                role: a::Role::Assistant,
+                content: a::MessageContent::Blocks(vec![
+                    a::ContentBlock::Text {
+                        text: "I'll read both.".into(),
+                        cache_control: None,
+                    },
+                    a::ContentBlock::ToolUse {
+                        id: "toolu_1".into(),
+                        name: "Read".into(),
+                        input: json!({"file_path": "/tmp/a.txt"}),
+                    },
+                    a::ContentBlock::ToolUse {
+                        id: "toolu_2".into(),
+                        name: "Read".into(),
+                        input: json!({"file_path": "/tmp/b.txt"}),
+                    },
+                ]),
+            }],
+            tools: vec![],
+            tool_choice: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            stream: None,
+            stop_sequences: vec![],
+            metadata: None,
+            thinking: None,
+        };
+        let out = convert(&req);
+        insta::assert_json_snapshot!(out, {
+            ".messages[].tool_calls[].function.arguments" => "[tool arguments]",
+        });
     }
 }

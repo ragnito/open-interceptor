@@ -1,0 +1,60 @@
+---
+source: src/translate/req_anthropic_to_openai.rs
+expression: out
+---
+{
+  "model": "claude-opus-4-7",
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are Claude Code, an AI coding assistant."
+    },
+    {
+      "role": "user",
+      "content": "read /tmp/config.json"
+    },
+    {
+      "role": "assistant",
+      "content": "Let me read that.",
+      "tool_calls": [
+        {
+          "id": "toolu_01Xabc",
+          "type": "function",
+          "function": {
+            "name": "Read",
+            "arguments": "[tool arguments]"
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "toolu_01Xabc",
+      "content": "{\"host\": \"localhost\"}"
+    }
+  ],
+  "max_tokens": 4096,
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "Read",
+        "description": "Reads a file",
+        "parameters": {
+          "properties": {
+            "file_path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "file_path"
+          ],
+          "type": "object"
+        }
+      }
+    }
+  ],
+  "tool_choice": "auto",
+  "stream": true,
+  "stop": "END"
+}

@@ -62,7 +62,10 @@ pub async fn forward(
 
     // 4. POST upstream.
     let upstream_url = build_upstream_url(&provider.url);
-    let api_key = provider.api_key.as_deref().ok_or(ForwardError::MissingApiKey)?;
+    let api_key = provider
+        .api_key
+        .as_deref()
+        .ok_or(ForwardError::MissingApiKey)?;
 
     let upstream_resp = http_client()
         .post(&upstream_url)
@@ -86,18 +89,47 @@ pub async fn forward(
     let status = upstream_resp.status();
 
     if !status.is_success() {
-        let body = upstream_resp.bytes().await.map_err(ForwardError::Upstream)?;
+        let body = upstream_resp
+            .bytes()
+            .await
+            .map_err(ForwardError::Upstream)?;
+        let body_text = String::from_utf8_lossy(&body).into_owned();
+
+        // Diagnostic dump: the last 3 messages we sent upstream so we can
+        // see whether the assistant turn included reasoning_content,
+        // tool_calls, etc. Full request body on a separate DEBUG line.
+        let tail = summarize_message_tail(&oai_req.messages, 3);
+        tracing::debug!(
+            upstream_status = status.as_u16(),
+            upstream_body = %body_text,
+            message_count = oai_req.messages.len(),
+            tail_shape = %tail,
+            "upstream error — dumping recent message shape",
+        );
+        tracing::debug!(
+            upstream_request_body = %String::from_utf8_lossy(
+                &serde_json::to_vec(&oai_req).unwrap_or_default()
+            ),
+            "upstream error — full request body",
+        );
+
         return Err(ForwardError::UpstreamError {
             status: status.as_u16(),
-            body: String::from_utf8_lossy(&body).into_owned(),
+            body: body_text,
         });
     }
 
     if wants_stream {
-        // 5a. Streaming path: hand the upstream Response off to the SSE
-        //     translator and wrap the resulting Bytes stream in an axum
-        //     Body. The client will see Anthropic-shaped events arriving
-        //     chunk-by-chunk with no buffering beyond OS TCP windows.
+        // 5a. Streaming path: the client receives Anthropic-shaped SSE
+        //     events chunk-by-chunk with no buffering.
+        //
+        //     Cancellation: when the client disconnects, Axum drops the
+        //     Body and stops polling the stream. This drops
+        //     sse_stream::convert()'s internal reader, which drops the
+        //     reqwest Response, aborting the upstream connection before
+        //     the next chunk arrives. No explicit CancellationToken is
+        //     needed — Rust's ownership model propagates cancellation
+        //     through the async call stack automatically.
         let stream = sse_stream::convert(upstream_resp);
         let body = Body::from_stream(stream);
         Ok(axum::http::Response::builder()
@@ -120,9 +152,68 @@ pub async fn forward(
     }
 }
 
+/// Compact, allocation-cheap summary of the last N messages — role, content
+/// length, presence of reasoning_content, and tool_calls metadata. Used on
+/// the upstream-error path so we can diagnose what the model saw without
+/// dumping prompts verbatim into the logs.
+fn summarize_message_tail(messages: &[types_openai::ChatMessage], n: usize) -> String {
+    let start = messages.len().saturating_sub(n);
+    let mut out = String::new();
+    out.push('[');
+    for (i, msg) in messages.iter().enumerate().skip(start) {
+        if i > start {
+            out.push_str(", ");
+        }
+        match msg {
+            types_openai::ChatMessage::System { content } => {
+                out.push_str(&format!("#{i} system(len={})", content.len()));
+            }
+            types_openai::ChatMessage::User { content } => {
+                let len = match content {
+                    types_openai::UserContent::Text(t) => t.len(),
+                    types_openai::UserContent::Parts(p) => p.len(),
+                };
+                out.push_str(&format!("#{i} user(parts_or_chars={len})"));
+            }
+            types_openai::ChatMessage::Assistant {
+                content,
+                tool_calls,
+                reasoning_content,
+            } => {
+                out.push_str(&format!(
+                    "#{i} assistant(content_len={}, tool_calls={}, reasoning={})",
+                    content.as_deref().map(|c| c.len()).unwrap_or(0),
+                    tool_calls.len(),
+                    reasoning_content
+                        .as_deref()
+                        .map(|r| format!("Some(len={})", r.len()))
+                        .unwrap_or_else(|| "None".into()),
+                ));
+            }
+            types_openai::ChatMessage::Tool {
+                tool_call_id,
+                content,
+            } => {
+                out.push_str(&format!(
+                    "#{i} tool(id={tool_call_id}, content_len={})",
+                    content.len()
+                ));
+            }
+        }
+    }
+    out.push(']');
+    out
+}
+
 fn build_upstream_url(base: &str) -> String {
     let base = base.trim_end_matches('/');
-    format!("{base}/v1/chat/completions")
+    // If the base already ends with /v1, the provider uses the
+    // standard OpenAI path prefix — just append /chat/completions.
+    if base.ends_with("/v1") {
+        format!("{base}/chat/completions")
+    } else {
+        format!("{base}/v1/chat/completions")
+    }
 }
 
 #[derive(Debug, thiserror::Error)]

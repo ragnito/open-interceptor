@@ -221,6 +221,11 @@ impl State {
         }
         let index = self.next_block_index;
         self.next_block_index += 1;
+        tracing::debug!(
+            block_index = index,
+            message_id = %self.id,
+            "SSE: opening thinking block (reasoning_content arrived from upstream)",
+        );
         out.push(a::SseEvent::ContentBlockStart {
             index,
             content_block: a::ContentBlockStart::Thinking {

@@ -1,0 +1,29 @@
+---
+source: src/translate/resp_openai_to_anthropic.rs
+expression: out
+---
+{
+  "id": "chatcmpl-test",
+  "type": "message",
+  "role": "assistant",
+  "content": [
+    {
+      "type": "text",
+      "text": "Let me check the file."
+    },
+    {
+      "type": "tool_use",
+      "id": "call_abc123",
+      "name": "Read",
+      "input": {
+        "file_path": "/tmp/config.json"
+      }
+    }
+  ],
+  "model": "test-model",
+  "stop_reason": "tool_use",
+  "usage": {
+    "input_tokens": 10,
+    "output_tokens": 5
+  }
+}
