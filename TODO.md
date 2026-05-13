@@ -14,7 +14,7 @@ Marca cada tarea al completarla y commitea junto al cambio. El detalle técnico 
   - Base del crate binario.
 - [x] **T0.4** Configurar `Cargo.toml` con dependencias core: `tokio` (full), `axum` 0.8, `hyper` 1, `reqwest` 0.12 (rustls-tls, stream, json), `serde` (derive), `serde_json`, `serde_yml` (en lugar de serde_yaml deprecated), `clap` v4 (derive), `tracing`, `tracing-subscriber` (env-filter), `tracing-appender`, `globset`, `shellexpand`, `anyhow`, `thiserror`, `eventsource-stream`, `futures`, `tokio-util` (rt)
   - `[profile.release]`: `lto = "fat"`, `codegen-units = 1`, `strip = true`, `opt-level = 3`, `panic = "abort"` — binario stripped, optimizado para tamaño + velocidad.
-- [ ] **T0.5** Crear `.gitignore`, `README.md` mínimo, `LICENSE` (MIT)
+- [x] **T0.5** Crear `.gitignore`, `README.md` mínimo, `LICENSE` (MIT)
 - [ ] **T0.6** Crear `config.yaml.example` con los 5 providers del plan
 - [ ] **T0.7** Crear directorios `src/providers/` y `src/translate/` con `mod.rs` vacíos
 
