@@ -16,7 +16,7 @@ Marca cada tarea al completarla y commitea junto al cambio. El detalle técnico 
   - `[profile.release]`: `lto = "fat"`, `codegen-units = 1`, `strip = true`, `opt-level = 3`, `panic = "abort"` — binario stripped, optimizado para tamaño + velocidad.
 - [x] **T0.5** Crear `.gitignore`, `README.md` mínimo, `LICENSE` (MIT)
 - [x] **T0.6** Crear `config.yaml.example` con los 5 providers del plan
-- [ ] **T0.7** Crear directorios `src/providers/` y `src/translate/` con `mod.rs` vacíos
+- [x] **T0.7** Crear directorios `src/providers/` y `src/translate/` con `mod.rs` vacíos
 
 ## Phase 1 — Core proxy + ruteo Anthropic-compatible (semana 1)
 
