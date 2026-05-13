@@ -138,9 +138,11 @@ async fn dispatch(
     let effective_model = resolution.effective_model.clone();
     let body_bytes = body.len();
 
-    let result = match provider_type {
+    // Dispatch to the right provider. Each provider has its own error
+    // type, so we normalize to a uniform Response here.
+    let response = match provider_type {
         ProviderType::AnthropicCompatible => {
-            providers::anthropic::forward(
+            match providers::anthropic::forward(
                 resolution.provider,
                 &model,
                 &effective_model,
@@ -150,13 +152,23 @@ async fn dispatch(
                 body,
             )
             .await
+            {
+                Ok(r) => Ok(r),
+                Err(e) => Err(map_anthropic_error(&provider_name, e)),
+            }
         }
         ProviderType::OpenaiCompatible => {
-            return anthropic_error(
-                StatusCode::NOT_IMPLEMENTED,
-                "not_implemented",
-                "openai_compatible providers require the translation layer from Phase 3",
-            );
+            match providers::openai::forward(
+                resolution.provider,
+                &model,
+                &effective_model,
+                body,
+            )
+            .await
+            {
+                Ok(r) => Ok(r),
+                Err(e) => Err(map_openai_error(&provider_name, e)),
+            }
         }
         ProviderType::Passthrough => {
             return anthropic_error(
@@ -169,7 +181,7 @@ async fn dispatch(
 
     let elapsed_ms = start.elapsed().as_millis() as u64;
 
-    match result {
+    match response {
         Ok(response) => {
             tracing::info!(
                 method = %method,
@@ -186,35 +198,17 @@ async fn dispatch(
             );
             response
         }
-        Err(err) => {
+        Err(error_response) => {
             tracing::error!(
                 method = %method,
                 path = %endpoint,
                 model = %model,
                 provider = %provider_name,
-                error = %err,
+                upstream_status = error_response.status().as_u16(),
                 elapsed_ms,
                 "dispatch failed",
             );
-            // Map provider errors to Anthropic-shaped 502s so the client
-            // sees a meaningful payload instead of a transport failure.
-            match err {
-                providers::anthropic::ForwardError::Upstream(e) => anthropic_error(
-                    StatusCode::BAD_GATEWAY,
-                    "api_error",
-                    &format!("upstream provider `{provider_name}` failed: {e}"),
-                ),
-                providers::anthropic::ForwardError::MissingApiKey => anthropic_error(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "config_error",
-                    &format!("provider `{provider_name}` has neither passthrough_auth nor api_key"),
-                ),
-                other => anthropic_error(
-                    StatusCode::BAD_GATEWAY,
-                    "api_error",
-                    &format!("forwarding to `{provider_name}` failed: {other}"),
-                ),
-            }
+            error_response
         }
     }
 }
@@ -245,4 +239,70 @@ fn anthropic_error(status: StatusCode, kind: &str, message: &str) -> Response {
         })),
     )
         .into_response()
+}
+
+/// Translate a `providers::anthropic::ForwardError` into the Anthropic-
+/// shaped error response the client receives.
+fn map_anthropic_error(
+    provider_name: &str,
+    err: providers::anthropic::ForwardError,
+) -> Response {
+    use providers::anthropic::ForwardError as E;
+    match err {
+        E::Upstream(e) => anthropic_error(
+            StatusCode::BAD_GATEWAY,
+            "api_error",
+            &format!("upstream `{provider_name}` failed: {e}"),
+        ),
+        E::MissingApiKey => anthropic_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "config_error",
+            &format!("`{provider_name}` has neither passthrough_auth nor api_key"),
+        ),
+        other => anthropic_error(
+            StatusCode::BAD_GATEWAY,
+            "api_error",
+            &format!("forwarding to `{provider_name}` failed: {other}"),
+        ),
+    }
+}
+
+/// Translate a `providers::openai::ForwardError` similarly.
+fn map_openai_error(
+    provider_name: &str,
+    err: providers::openai::ForwardError,
+) -> Response {
+    use providers::openai::ForwardError as E;
+    match err {
+        E::StreamingNotImplemented => anthropic_error(
+            StatusCode::NOT_IMPLEMENTED,
+            "not_implemented",
+            "streaming through the OpenAI translation layer arrives in T3.5",
+        ),
+        E::MissingApiKey => anthropic_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "config_error",
+            &format!("`{provider_name}` is openai_compatible and needs an api_key"),
+        ),
+        E::UpstreamError { status, body } => anthropic_error(
+            StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY),
+            "api_error",
+            &format!("upstream `{provider_name}` returned {status}: {body}"),
+        ),
+        E::Upstream(e) => anthropic_error(
+            StatusCode::BAD_GATEWAY,
+            "api_error",
+            &format!("upstream `{provider_name}` transport error: {e}"),
+        ),
+        E::RequestParse(e) => anthropic_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_request_error",
+            &format!("could not parse request body as Anthropic Messages: {e}"),
+        ),
+        other => anthropic_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "api_error",
+            &format!("translating to `{provider_name}` failed: {other}"),
+        ),
+    }
 }

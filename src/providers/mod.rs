@@ -5,3 +5,4 @@
 // endpoint, etc.). `openai` and `passthrough` arrive in later phases.
 
 pub mod anthropic;
+pub mod openai;
