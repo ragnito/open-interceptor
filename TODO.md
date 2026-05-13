@@ -29,7 +29,11 @@ Marca cada tarea al completarla y commitea junto al cambio. El detalle técnico 
 - [ ] **T1.5** `src/proxy.rs`: servidor Axum con `axum::Router::new()` y handler `POST /v1/messages`. Bufferizar body, parsear `model`, llamar al router.
   - Configurar `tokio::main` con `Builder::new_multi_thread`.
 - [ ] **T1.6** Handler para `POST /v1/messages/count_tokens` con misma lógica de ruteo
-- [ ] **T1.7** `src/providers/anthropic.rs`: implementar `forward()`. Reemplaza header `x-api-key` con la del provider; si `passthrough_auth: true` mantiene la del cliente.
+- [ ] **T1.7** `src/providers/anthropic.rs`: implementar `forward()` con dos modos según `passthrough_auth`:
+  - `passthrough_auth: false` (modo API key): sustituye `Authorization`/`x-api-key` con la del provider, forwardea el resto de headers end-to-end.
+  - `passthrough_auth: true` (modo suscripción OAuth — DIFERENCIADOR): preserva **byte-exact** los headers entrantes incluyendo `Authorization: Bearer sk-ant-oat01-...`, `anthropic-version`, `anthropic-beta` (crítico: incluye `oauth-2025-04-20`), `anthropic-dangerous-direct-browser-access`, `x-app: cli`, `X-Claude-Code-Session-Id`, todos los `X-Stainless-*`, `User-Agent: claude-cli/...`. Preservar el query string del path (`?beta=true`). Forwardea el body byte-for-byte (incluido `metadata.user_id` con device/account/session IDs).
+  - En ambos modos: rewrite del header `Host` al upstream; dropear hop-by-hop (RFC 7230 §6.1: `Connection`, `Keep-Alive`, `Proxy-*`, `TE`, `Trailer`, `Transfer-Encoding`, `Upgrade`); **nunca** añadir `Via`, `X-Forwarded-*`, `Forwarded`.
+  - Ver `docs/claude-code-headers.md` para la especificación completa basada en captura empírica de Claude Code 2.1.140.
 - [ ] **T1.8** Streaming SSE response passthrough con `axum::body::Body::from_stream(reqwest_response.bytes_stream())`
 - [ ] **T1.9** `src/normalizer.rs`: función `sse_inject_usage()` que parsea cada chunk SSE Anthropic, detecta `message_delta` sin `usage`, inyecta `{ input_tokens: 0, output_tokens: 0 }`. Wrappear el stream del provider con esta función.
 - [ ] **T1.10** `src/normalizer.rs`: función `strip_thinking_blocks()` que elimina content blocks tipo `thinking` del body request (para providers que no los soportan)
