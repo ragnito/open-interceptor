@@ -31,9 +31,11 @@ use crate::translate::types_openai as o;
 
 /// Consume an OpenAI streaming response, return a Stream of pre-encoded
 /// Anthropic SSE byte chunks ready for axum::body::Body::from_stream.
-pub fn convert(
-    upstream: reqwest::Response,
-) -> impl Stream<Item = Result<Bytes, std::io::Error>> {
+///
+/// Cancellation is automatic: when the caller drops the resulting Stream,
+/// the inner `eventsource` reader and its backing `reqwest::Response` are
+/// dropped as well, aborting the upstream connection before the next chunk.
+pub fn convert(upstream: reqwest::Response) -> impl Stream<Item = Result<Bytes, std::io::Error>> {
     stream! {
         let mut state = State::new();
         let mut event_stream = Box::pin(upstream.bytes_stream().eventsource());
@@ -101,6 +103,7 @@ struct State {
 
 #[derive(Clone, Copy)]
 enum Current {
+    Thinking { index: u32 },
     Text { index: u32 },
     ToolUse { index: u32 },
 }
@@ -108,6 +111,7 @@ enum Current {
 impl Current {
     fn index(self) -> u32 {
         match self {
+            Current::Thinking { index } => index,
             Current::Text { index } => index,
             Current::ToolUse { index } => index,
         }
@@ -133,7 +137,11 @@ impl State {
 
         // Lock in id / model on the very first chunk we see.
         if !self.started {
-            self.id = if chunk.id.is_empty() { default_message_id() } else { chunk.id.clone() };
+            self.id = if chunk.id.is_empty() {
+                default_message_id()
+            } else {
+                chunk.id.clone()
+            };
             self.model = chunk.model.clone();
             self.emit_message_start(&mut out);
             self.started = true;
@@ -166,16 +174,30 @@ impl State {
     }
 
     fn process_choice(&mut self, choice: o::ChunkChoice, out: &mut Vec<a::SseEvent>) {
+        // Reasoning delta (DeepSeek V4, Qwen3, etc.). Open or continue a
+        // Thinking block. Arrives before content in thinking-mode responses.
+        if let Some(reasoning) = choice.delta.reasoning_content
+            && !reasoning.is_empty()
+        {
+            self.ensure_thinking_block(out);
+            if let Some(Current::Thinking { index }) = self.current {
+                out.push(a::SseEvent::ContentBlockDelta {
+                    index,
+                    delta: a::ContentBlockDelta::ThinkingDelta { thinking: reasoning },
+                });
+            }
+        }
+
         // Text delta. Open or continue a Text block.
-        if let Some(content) = choice.delta.content {
-            if !content.is_empty() {
-                self.ensure_text_block(out);
-                if let Some(Current::Text { index }) = self.current {
-                    out.push(a::SseEvent::ContentBlockDelta {
-                        index,
-                        delta: a::ContentBlockDelta::TextDelta { text: content },
-                    });
-                }
+        if let Some(content) = choice.delta.content
+            && !content.is_empty()
+        {
+            self.ensure_text_block(out);
+            if let Some(Current::Text { index }) = self.current {
+                out.push(a::SseEvent::ContentBlockDelta {
+                    index,
+                    delta: a::ContentBlockDelta::TextDelta { text: content },
+                });
             }
         }
 
@@ -188,6 +210,24 @@ impl State {
         if let Some(reason) = choice.finish_reason {
             self.finish_reason = Some(reason);
         }
+    }
+
+    fn ensure_thinking_block(&mut self, out: &mut Vec<a::SseEvent>) {
+        if matches!(self.current, Some(Current::Thinking { .. })) {
+            return;
+        }
+        if let Some(cur) = self.current.take() {
+            out.push(a::SseEvent::ContentBlockStop { index: cur.index() });
+        }
+        let index = self.next_block_index;
+        self.next_block_index += 1;
+        out.push(a::SseEvent::ContentBlockStart {
+            index,
+            content_block: a::ContentBlockStart::Thinking {
+                thinking: String::new(),
+            },
+        });
+        self.current = Some(Current::Thinking { index });
     }
 
     /// If a Text block isn't currently open, close whatever is and open
@@ -203,7 +243,9 @@ impl State {
         self.next_block_index += 1;
         out.push(a::SseEvent::ContentBlockStart {
             index,
-            content_block: a::ContentBlockStart::Text { text: String::new() },
+            content_block: a::ContentBlockStart::Text {
+                text: String::new(),
+            },
         });
         self.current = Some(Current::Text { index });
     }
@@ -242,15 +284,14 @@ impl State {
         };
 
         // Forward the arguments fragment as input_json_delta.
-        if let Some(func) = tc.function {
-            if let Some(args) = func.arguments {
-                if !args.is_empty() {
-                    out.push(a::SseEvent::ContentBlockDelta {
-                        index: anthropic_index,
-                        delta: a::ContentBlockDelta::InputJsonDelta { partial_json: args },
-                    });
-                }
-            }
+        if let Some(func) = tc.function
+            && let Some(args) = func.arguments
+            && !args.is_empty()
+        {
+            out.push(a::SseEvent::ContentBlockDelta {
+                index: anthropic_index,
+                delta: a::ContentBlockDelta::InputJsonDelta { partial_json: args },
+            });
         }
     }
 
@@ -359,36 +400,48 @@ mod tests {
         let mut s = State::new();
 
         // Chunk 1: role
-        let e1 = process(&mut s, json!({
-            "id": "id-1", "model": "kimi", "choices":[
-                {"index":0,"delta":{"role":"assistant"},"finish_reason":null}
-            ]
-        }));
+        let e1 = process(
+            &mut s,
+            json!({
+                "id": "id-1", "model": "kimi", "choices":[
+                    {"index":0,"delta":{"role":"assistant"},"finish_reason":null}
+                ]
+            }),
+        );
         assert!(matches!(e1[0], a::SseEvent::MessageStart { .. }));
 
         // Chunk 2: text "Hello"
-        let e2 = process(&mut s, json!({
-            "id": "id-1", "model": "kimi", "choices":[
-                {"index":0,"delta":{"content":"Hello"},"finish_reason":null}
-            ]
-        }));
+        let e2 = process(
+            &mut s,
+            json!({
+                "id": "id-1", "model": "kimi", "choices":[
+                    {"index":0,"delta":{"content":"Hello"},"finish_reason":null}
+                ]
+            }),
+        );
         assert!(matches!(e2[0], a::SseEvent::ContentBlockStart { .. }));
         assert!(matches!(e2[1], a::SseEvent::ContentBlockDelta { .. }));
 
         // Chunk 3: text " world"
-        let e3 = process(&mut s, json!({
-            "id": "id-1", "model": "kimi", "choices":[
-                {"index":0,"delta":{"content":" world"},"finish_reason":null}
-            ]
-        }));
+        let e3 = process(
+            &mut s,
+            json!({
+                "id": "id-1", "model": "kimi", "choices":[
+                    {"index":0,"delta":{"content":" world"},"finish_reason":null}
+                ]
+            }),
+        );
         assert!(matches!(e3[0], a::SseEvent::ContentBlockDelta { .. }));
 
         // Chunk 4: finish
-        let _ = process(&mut s, json!({
-            "id": "id-1", "model": "kimi", "choices":[
-                {"index":0,"delta":{},"finish_reason":"stop"}
-            ]
-        }));
+        let _ = process(
+            &mut s,
+            json!({
+                "id": "id-1", "model": "kimi", "choices":[
+                    {"index":0,"delta":{},"finish_reason":"stop"}
+                ]
+            }),
+        );
 
         // Finalize
         let fin = s.finalize();
@@ -406,18 +459,27 @@ mod tests {
     fn tool_call_argument_fragments_become_input_json_deltas() {
         let mut s = State::new();
         // Chunk 1: opens tool call with id+name, empty args
-        let e1 = process(&mut s, json!({
-            "id": "id", "model": "m", "choices":[{"index":0,"delta":{
-                "role":"assistant",
-                "tool_calls":[{"index":0,"id":"call_x","type":"function",
-                    "function":{"name":"Read","arguments":""}}]
-            },"finish_reason":null}]
-        }));
+        let e1 = process(
+            &mut s,
+            json!({
+                "id": "id", "model": "m", "choices":[{"index":0,"delta":{
+                    "role":"assistant",
+                    "tool_calls":[{"index":0,"id":"call_x","type":"function",
+                        "function":{"name":"Read","arguments":""}}]
+                },"finish_reason":null}]
+            }),
+        );
         // message_start + content_block_start
         assert!(matches!(e1[0], a::SseEvent::MessageStart { .. }));
         match &e1[1] {
-            a::SseEvent::ContentBlockStart { index: 0, content_block } => {
-                assert!(matches!(content_block, a::ContentBlockStart::ToolUse { .. }));
+            a::SseEvent::ContentBlockStart {
+                index: 0,
+                content_block,
+            } => {
+                assert!(matches!(
+                    content_block,
+                    a::ContentBlockStart::ToolUse { .. }
+                ));
                 if let a::ContentBlockStart::ToolUse { id, name, .. } = content_block {
                     assert_eq!(id, "call_x");
                     assert_eq!(name, "Read");
@@ -427,12 +489,15 @@ mod tests {
         }
 
         // Chunk 2: argument fragment "{\"path\""
-        let e2 = process(&mut s, json!({
-            "id": "id", "model": "m", "choices":[{"index":0,"delta":{
-                "tool_calls":[{"index":0,
-                    "function":{"arguments":"{\"path\""}}]
-            },"finish_reason":null}]
-        }));
+        let e2 = process(
+            &mut s,
+            json!({
+                "id": "id", "model": "m", "choices":[{"index":0,"delta":{
+                    "tool_calls":[{"index":0,
+                        "function":{"arguments":"{\"path\""}}]
+                },"finish_reason":null}]
+            }),
+        );
         match &e2[0] {
             a::SseEvent::ContentBlockDelta { index: 0, delta } => match delta {
                 a::ContentBlockDelta::InputJsonDelta { partial_json } => {
@@ -444,18 +509,24 @@ mod tests {
         }
 
         // Chunk 3: rest of arguments
-        let _ = process(&mut s, json!({
-            "id": "id", "model": "m", "choices":[{"index":0,"delta":{
-                "tool_calls":[{"index":0,"function":{"arguments":":\"/tmp\"}"}}]
-            },"finish_reason":null}]
-        }));
+        let _ = process(
+            &mut s,
+            json!({
+                "id": "id", "model": "m", "choices":[{"index":0,"delta":{
+                    "tool_calls":[{"index":0,"function":{"arguments":":\"/tmp\"}"}}]
+                },"finish_reason":null}]
+            }),
+        );
 
         // Chunk 4: finish
-        let _ = process(&mut s, json!({
-            "id": "id", "model": "m", "choices":[
-                {"index":0,"delta":{},"finish_reason":"tool_calls"}
-            ]
-        }));
+        let _ = process(
+            &mut s,
+            json!({
+                "id": "id", "model": "m", "choices":[
+                    {"index":0,"delta":{},"finish_reason":"tool_calls"}
+                ]
+            }),
+        );
 
         let fin = s.finalize();
         assert!(matches!(fin[0], a::SseEvent::ContentBlockStop { index: 0 }));
@@ -471,18 +542,24 @@ mod tests {
     fn text_then_tool_call_splits_into_two_blocks() {
         let mut s = State::new();
         // Text first
-        let _ = process(&mut s, json!({
-            "id": "id", "model": "m", "choices":[{"index":0,"delta":{
-                "role":"assistant","content":"let me check"
-            },"finish_reason":null}]
-        }));
+        let _ = process(
+            &mut s,
+            json!({
+                "id": "id", "model": "m", "choices":[{"index":0,"delta":{
+                    "role":"assistant","content":"let me check"
+                },"finish_reason":null}]
+            }),
+        );
         // Now a tool call
-        let e2 = process(&mut s, json!({
-            "id": "id", "model": "m", "choices":[{"index":0,"delta":{
-                "tool_calls":[{"index":0,"id":"c","type":"function",
-                    "function":{"name":"Read","arguments":"{}"}}]
-            },"finish_reason":null}]
-        }));
+        let e2 = process(
+            &mut s,
+            json!({
+                "id": "id", "model": "m", "choices":[{"index":0,"delta":{
+                    "tool_calls":[{"index":0,"id":"c","type":"function",
+                        "function":{"name":"Read","arguments":"{}"}}]
+                },"finish_reason":null}]
+            }),
+        );
         // First event of the second chunk should be ContentBlockStop
         // closing the text block, then ContentBlockStart opening the
         // tool_use block at index 1.
@@ -496,16 +573,22 @@ mod tests {
     #[test]
     fn usage_from_final_chunk_propagates_to_message_delta() {
         let mut s = State::new();
-        let _ = process(&mut s, json!({
-            "id": "id", "model": "m", "choices":[{"index":0,"delta":{
-                "role":"assistant","content":"x"
-            },"finish_reason":null}]
-        }));
-        let _ = process(&mut s, json!({
-            "id": "id", "model": "m",
-            "choices":[{"index":0,"delta":{},"finish_reason":"stop"}],
-            "usage": {"prompt_tokens": 100, "completion_tokens": 25, "total_tokens": 125}
-        }));
+        let _ = process(
+            &mut s,
+            json!({
+                "id": "id", "model": "m", "choices":[{"index":0,"delta":{
+                    "role":"assistant","content":"x"
+                },"finish_reason":null}]
+            }),
+        );
+        let _ = process(
+            &mut s,
+            json!({
+                "id": "id", "model": "m",
+                "choices":[{"index":0,"delta":{},"finish_reason":"stop"}],
+                "usage": {"prompt_tokens": 100, "completion_tokens": 25, "total_tokens": 125}
+            }),
+        );
         let fin = s.finalize();
         match &fin[1] {
             a::SseEvent::MessageDelta { usage, .. } => {
@@ -527,14 +610,68 @@ mod tests {
     #[test]
     fn empty_text_delta_does_not_open_a_block() {
         let mut s = State::new();
-        let e = process(&mut s, json!({
-            "id": "id", "model": "m", "choices":[{"index":0,"delta":{
-                "role":"assistant","content":""
-            },"finish_reason":null}]
-        }));
+        let e = process(
+            &mut s,
+            json!({
+                "id": "id", "model": "m", "choices":[{"index":0,"delta":{
+                    "role":"assistant","content":""
+                },"finish_reason":null}]
+            }),
+        );
         // Only message_start, no block start for an empty content delta
         assert_eq!(e.len(), 1);
         assert!(matches!(e[0], a::SseEvent::MessageStart { .. }));
+    }
+
+    #[test]
+    fn reasoning_content_opens_thinking_block_before_text() {
+        let mut s = State::new();
+
+        // Chunk 1: role only
+        let e1 = process(
+            &mut s,
+            json!({
+                "id": "id-r", "model": "deepseek-v4-pro", "choices":[
+                    {"index":0,"delta":{"role":"assistant"},"finish_reason":null}
+                ]
+            }),
+        );
+        assert!(matches!(e1[0], a::SseEvent::MessageStart { .. }));
+
+        // Chunk 2: reasoning delta
+        let e2 = process(
+            &mut s,
+            json!({
+                "id": "id-r", "model": "deepseek-v4-pro", "choices":[
+                    {"index":0,"delta":{"reasoning_content":"let me think"},"finish_reason":null}
+                ]
+            }),
+        );
+        assert!(matches!(e2[0], a::SseEvent::ContentBlockStart { index: 0, content_block: a::ContentBlockStart::Thinking { .. } }));
+        match &e2[1] {
+            a::SseEvent::ContentBlockDelta { index: 0, delta: a::ContentBlockDelta::ThinkingDelta { thinking } } => {
+                assert_eq!(thinking, "let me think");
+            }
+            other => panic!("expected ThinkingDelta, got {other:?}"),
+        }
+
+        // Chunk 3: content delta — must close thinking block and open text block
+        let e3 = process(
+            &mut s,
+            json!({
+                "id": "id-r", "model": "deepseek-v4-pro", "choices":[
+                    {"index":0,"delta":{"content":"answer"},"finish_reason":null}
+                ]
+            }),
+        );
+        assert!(matches!(e3[0], a::SseEvent::ContentBlockStop { index: 0 }));
+        assert!(matches!(e3[1], a::SseEvent::ContentBlockStart { index: 1, content_block: a::ContentBlockStart::Text { .. } }));
+        match &e3[2] {
+            a::SseEvent::ContentBlockDelta { index: 1, delta: a::ContentBlockDelta::TextDelta { text } } => {
+                assert_eq!(text, "answer");
+            }
+            other => panic!("expected TextDelta, got {other:?}"),
+        }
     }
 
     #[test]
@@ -545,5 +682,126 @@ mod tests {
         assert!(s.starts_with("event: message_stop\n"));
         assert!(s.contains("data: "));
         assert!(s.ends_with("\n\n"));
+    }
+
+    #[test]
+    fn snapshot_full_stream_text_only() {
+        let mut s = State::new();
+        process(
+            &mut s,
+            json!({
+                "id": "chatcmpl-snapshot-1", "model": "kimi-k2.6", "choices":[
+                    {"index":0,"delta":{"role":"assistant"}, "finish_reason":null}
+                ]
+            }),
+        );
+        process(
+            &mut s,
+            json!({
+                "id": "chatcmpl-snapshot-1", "model": "kimi-k2.6", "choices":[
+                    {"index":0,"delta":{"content":"The file contains"}, "finish_reason":null}
+                ]
+            }),
+        );
+        process(
+            &mut s,
+            json!({
+                "id": "chatcmpl-snapshot-1", "model": "kimi-k2.6", "choices":[
+                    {"index":0,"delta":{"content":" configuration data."}, "finish_reason":null}
+                ]
+            }),
+        );
+        process(
+            &mut s,
+            json!({
+                "id": "chatcmpl-snapshot-1", "model": "kimi-k2.6",
+                "choices":[{"index":0,"delta":{},"finish_reason":"stop"}],
+                "usage": {"prompt_tokens": 85, "completion_tokens": 12, "total_tokens": 97}
+            }),
+        );
+        let events = s.finalize();
+
+        let wire: Vec<String> = events
+            .iter()
+            .map(|e| {
+                let bytes = format_sse(e);
+                String::from_utf8_lossy(&bytes).trim_end().to_string()
+            })
+            .collect();
+
+        insta::assert_json_snapshot!(wire);
+    }
+
+    #[test]
+    fn snapshot_full_stream_text_then_tool_call() {
+        let mut s = State::new();
+        process(
+            &mut s,
+            json!({
+                "id": "chatcmpl-snapshot-2", "model": "qwen3.6-plus", "choices":[
+                    {"index":0,"delta":{"role":"assistant"}, "finish_reason":null}
+                ]
+            }),
+        );
+        process(
+            &mut s,
+            json!({
+                "id": "chatcmpl-snapshot-2", "model": "qwen3.6-plus", "choices":[
+                    {"index":0,"delta":{"content":"I'll read the file now."}, "finish_reason":null}
+                ]
+            }),
+        );
+        process(
+            &mut s,
+            json!({
+                "id": "chatcmpl-snapshot-2", "model": "qwen3.6-plus", "choices":[
+                    {"index":0,"delta":{
+                        "tool_calls":[
+                            {"index":0,"id":"call_read_1","type":"function",
+                             "function":{"name":"Read","arguments":""}}
+                        ]
+                    }, "finish_reason":null}
+                ]
+            }),
+        );
+        process(
+            &mut s,
+            json!({
+                "id": "chatcmpl-snapshot-2", "model": "qwen3.6-plus", "choices":[
+                    {"index":0,"delta":{"tool_calls":[
+                        {"index":0,"function":{"arguments":"{\"file"}}
+                    ]}, "finish_reason":null}
+                ]
+            }),
+        );
+        process(
+            &mut s,
+            json!({
+                "id": "chatcmpl-snapshot-2", "model": "qwen3.6-plus", "choices":[
+                    {"index":0,"delta":{"tool_calls":[
+                        {"index":0,"function":{"arguments":"_path\":\"/tmp/data.txt\"}"}}
+                    ]}, "finish_reason":null}
+                ]
+            }),
+        );
+        process(
+            &mut s,
+            json!({
+                "id": "chatcmpl-snapshot-2", "model": "qwen3.6-plus",
+                "choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}],
+                "usage": {"prompt_tokens": 120, "completion_tokens": 35, "total_tokens": 155}
+            }),
+        );
+        let events = s.finalize();
+
+        let wire: Vec<String> = events
+            .iter()
+            .map(|e| {
+                let bytes = format_sse(e);
+                String::from_utf8_lossy(&bytes).trim_end().to_string()
+            })
+            .collect();
+
+        insta::assert_json_snapshot!(wire);
     }
 }

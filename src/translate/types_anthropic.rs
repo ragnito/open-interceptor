@@ -253,6 +253,7 @@ pub enum SseEvent {
         usage: Usage,
     },
     MessageStop,
+    #[allow(dead_code)]
     Ping,
 }
 
@@ -272,19 +273,34 @@ pub struct MessageStartPayload {
 #[derive(Debug, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ContentBlockStart {
-    Text { text: String },
-    ToolUse { id: String, name: String, input: Value },
-    Thinking { thinking: String },
+    Text {
+        text: String,
+    },
+    ToolUse {
+        id: String,
+        name: String,
+        input: Value,
+    },
+    Thinking {
+        thinking: String,
+    },
 }
 
 #[derive(Debug, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
+#[allow(clippy::enum_variant_names)]
 pub enum ContentBlockDelta {
-    TextDelta { text: String },
+    TextDelta {
+        text: String,
+    },
     /// Tool call arguments arrive as a stream of partial JSON strings;
     /// the assembled JSON only becomes valid at the end.
-    InputJsonDelta { partial_json: String },
-    ThinkingDelta { thinking: String },
+    InputJsonDelta {
+        partial_json: String,
+    },
+    ThinkingDelta {
+        thinking: String,
+    },
 }
 
 #[derive(Debug, Serialize)]
@@ -385,7 +401,10 @@ mod tests {
         }"#;
         let resp: MessagesResponse = serde_json::from_str(json).unwrap();
         match &resp.content[0] {
-            ContentBlock::Thinking { thinking, signature } => {
+            ContentBlock::Thinking {
+                thinking,
+                signature,
+            } => {
                 assert_eq!(thinking, "let me reason");
                 assert_eq!(signature.as_deref(), Some("abc"));
             }

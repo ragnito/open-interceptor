@@ -62,6 +62,8 @@ pub enum ChatMessage {
         content: Option<String>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         tool_calls: Vec<ToolCall>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reasoning_content: Option<String>,
     },
     Tool {
         tool_call_id: String,
@@ -174,6 +176,8 @@ pub struct AssistantMessage {
     pub content: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tool_calls: Vec<ToolCall>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_content: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
@@ -217,6 +221,7 @@ pub struct ChatCompletionChunk {
 
 #[derive(Debug, Deserialize)]
 pub struct ChunkChoice {
+    #[allow(dead_code)]
     pub index: u32,
     pub delta: ChoiceDelta,
     #[serde(default)]
@@ -225,12 +230,17 @@ pub struct ChunkChoice {
 
 #[derive(Debug, Deserialize)]
 pub struct ChoiceDelta {
+    #[allow(dead_code)]
     #[serde(default)]
     pub role: Option<String>,
     #[serde(default)]
     pub content: Option<String>,
     #[serde(default)]
     pub tool_calls: Vec<ToolCallDelta>,
+    /// DeepSeek V4 and similar thinking-capable models emit this field
+    /// alongside or before `content` when reasoning mode is active.
+    #[serde(default)]
+    pub reasoning_content: Option<String>,
 }
 
 /// In streaming mode, OpenAI sends tool calls as a sequence of deltas
@@ -312,7 +322,10 @@ mod tests {
         }"#;
         let req: ChatCompletionRequest = serde_json::from_str(json).unwrap();
         match &req.messages[0] {
-            ChatMessage::Tool { tool_call_id, content } => {
+            ChatMessage::Tool {
+                tool_call_id,
+                content,
+            } => {
                 assert_eq!(tool_call_id, "call_1");
                 assert_eq!(content, "file contents here");
             }
@@ -378,7 +391,9 @@ mod tests {
         }"#;
         let req: ChatCompletionRequest = serde_json::from_str(json).unwrap();
         match &req.messages[0] {
-            ChatMessage::User { content: UserContent::Parts(parts) } => {
+            ChatMessage::User {
+                content: UserContent::Parts(parts),
+            } => {
                 assert_eq!(parts.len(), 2);
             }
             other => panic!("expected User with parts, got {other:?}"),
