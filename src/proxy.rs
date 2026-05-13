@@ -274,11 +274,6 @@ fn map_openai_error(
 ) -> Response {
     use providers::openai::ForwardError as E;
     match err {
-        E::StreamingNotImplemented => anthropic_error(
-            StatusCode::NOT_IMPLEMENTED,
-            "not_implemented",
-            "streaming through the OpenAI translation layer arrives in T3.5",
-        ),
         E::MissingApiKey => anthropic_error(
             StatusCode::INTERNAL_SERVER_ERROR,
             "config_error",

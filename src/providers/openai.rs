@@ -23,7 +23,7 @@ use reqwest::Client;
 
 use crate::config::Provider;
 use crate::translate::{
-    req_anthropic_to_openai, resp_openai_to_anthropic, types_anthropic, types_openai,
+    req_anthropic_to_openai, resp_openai_to_anthropic, sse_stream, types_anthropic, types_openai,
 };
 
 static HTTP_CLIENT: OnceLock<Client> = OnceLock::new();
@@ -52,17 +52,15 @@ pub async fn forward(
         a_req.model = effective_model.to_string();
     }
 
-    // 3. Streaming not implemented yet — reject explicitly.
+    // 3. Convert to OpenAI request. We honour the original stream flag —
+    // OpenAI also supports SSE streaming, so we ask upstream for the
+    // same shape the client wants and translate per-chunk on the way
+    // back.
     let wants_stream = a_req.stream.unwrap_or(false);
-    if wants_stream {
-        return Err(ForwardError::StreamingNotImplemented);
-    }
-
-    // 4. Convert to OpenAI request.
     let oai_req = req_anthropic_to_openai::convert(&a_req);
     let oai_body = serde_json::to_vec(&oai_req).map_err(ForwardError::RequestSerialize)?;
 
-    // 5. POST upstream.
+    // 4. POST upstream.
     let upstream_url = build_upstream_url(&provider.url);
     let api_key = provider.api_key.as_deref().ok_or(ForwardError::MissingApiKey)?;
 
@@ -70,6 +68,16 @@ pub async fn forward(
         .post(&upstream_url)
         .bearer_auth(api_key)
         .header("content-type", "application/json")
+        // Match the Accept the client implicitly wants; some upstreams
+        // require it to actually emit text/event-stream.
+        .header(
+            "accept",
+            if wants_stream {
+                "text/event-stream"
+            } else {
+                "application/json"
+            },
+        )
         .body(oai_body)
         .send()
         .await
@@ -85,18 +93,31 @@ pub async fn forward(
         });
     }
 
-    let oai_resp: types_openai::ChatCompletionResponse =
-        upstream_resp.json().await.map_err(ForwardError::Upstream)?;
-
-    // 6. Translate response back.
-    let a_resp = resp_openai_to_anthropic::convert_non_streaming(&oai_resp);
-    let out_body = serde_json::to_vec(&a_resp).map_err(ForwardError::ResponseSerialize)?;
-
-    Ok(axum::http::Response::builder()
-        .status(StatusCode::OK)
-        .header("content-type", "application/json")
-        .body(Body::from(out_body))
-        .expect("valid response"))
+    if wants_stream {
+        // 5a. Streaming path: hand the upstream Response off to the SSE
+        //     translator and wrap the resulting Bytes stream in an axum
+        //     Body. The client will see Anthropic-shaped events arriving
+        //     chunk-by-chunk with no buffering beyond OS TCP windows.
+        let stream = sse_stream::convert(upstream_resp);
+        let body = Body::from_stream(stream);
+        Ok(axum::http::Response::builder()
+            .status(StatusCode::OK)
+            .header("content-type", "text/event-stream")
+            .header("cache-control", "no-cache")
+            .body(body)
+            .expect("valid response"))
+    } else {
+        // 5b. Non-streaming path: parse, translate, serialize.
+        let oai_resp: types_openai::ChatCompletionResponse =
+            upstream_resp.json().await.map_err(ForwardError::Upstream)?;
+        let a_resp = resp_openai_to_anthropic::convert_non_streaming(&oai_resp);
+        let out_body = serde_json::to_vec(&a_resp).map_err(ForwardError::ResponseSerialize)?;
+        Ok(axum::http::Response::builder()
+            .status(StatusCode::OK)
+            .header("content-type", "application/json")
+            .body(Body::from(out_body))
+            .expect("valid response"))
+    }
 }
 
 fn build_upstream_url(base: &str) -> String {
@@ -123,9 +144,6 @@ pub enum ForwardError {
 
     #[error("provider needs an api_key configured")]
     MissingApiKey,
-
-    #[error("streaming through the OpenAI translation layer is not implemented yet (T3.5)")]
-    StreamingNotImplemented,
 }
 
 #[cfg(test)]

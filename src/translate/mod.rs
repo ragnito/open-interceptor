@@ -5,5 +5,6 @@
 
 pub mod req_anthropic_to_openai;
 pub mod resp_openai_to_anthropic;
+pub mod sse_stream;
 pub mod types_anthropic;
 pub mod types_openai;

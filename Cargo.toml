@@ -8,6 +8,7 @@ repository = "https://github.com/ragnito/open-interceptor"
 
 [dependencies]
 anyhow = "1.0.102"
+async-stream = "0.3.6"
 axum = "0.8.9"
 clap = { version = "4.6.1", features = ["derive"] }
 eventsource-stream = "0.2.3"
