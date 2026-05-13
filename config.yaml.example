@@ -1,0 +1,106 @@
+# open-interceptor configuration
+#
+# Copy this file to ~/.open-interceptor/config.yaml and adjust to your needs.
+# Environment variables in api_key fields are expanded with shell syntax: ${VAR}
+
+# Port the local proxy listens on. Claude Code will be pointed here via
+# ANTHROPIC_BASE_URL=http://127.0.0.1:3300
+port: 3300
+
+# Log level: trace | debug | info | warn | error
+log_level: info
+
+# -----------------------------------------------------------------------------
+# Providers
+#
+# Each provider has a unique key, a `type`, an upstream `url`, and an `api_key`.
+#
+# Types:
+#   - anthropic_compatible: speaks the Anthropic Messages API natively
+#                           (Anthropic, DeepSeek, OpenRouter, etc.)
+#   - openai_compatible:    speaks OpenAI Chat Completions; the proxy translates
+#                           requests/responses to/from the Anthropic format
+#   - passthrough:          forwards the client's auth header untouched
+#
+# Optional `passthrough_auth: true` keeps the client's Authorization/x-api-key
+# header instead of substituting with the provider's `api_key`.
+#
+# Optional `models: [...]` declares which model IDs this provider exposes for
+# the /v1/models spoofing endpoint. If omitted, the proxy will (eventually)
+# fetch the provider's own /v1/models and cache the result.
+# -----------------------------------------------------------------------------
+providers:
+
+  anthropic:
+    type: anthropic_compatible
+    url: https://api.anthropic.com
+    api_key: ${ANTHROPIC_API_KEY}
+    passthrough_auth: true
+    models:
+      - claude-opus-4-7
+      - claude-sonnet-4-6
+      - claude-haiku-4-5
+
+  deepseek:
+    type: anthropic_compatible
+    url: https://api.deepseek.com/anthropic
+    api_key: ${DEEPSEEK_API_KEY}
+    models:
+      - deepseek-chat
+      - deepseek-reasoner
+
+  openrouter:
+    type: anthropic_compatible
+    url: https://openrouter.ai/api/v1
+    api_key: ${OPENROUTER_API_KEY}
+    # models discovered dynamically from /v1/models
+
+  opencode:
+    type: anthropic_compatible
+    url: https://your-opencode-endpoint.example.com
+    api_key: ${OPENCODE_API_KEY}
+
+  custom-openai:
+    type: openai_compatible
+    url: https://api.openai.com/v1
+    api_key: ${OPENAI_API_KEY}
+    models:
+      - gpt-5
+      - gpt-4o
+      - o3-mini
+
+# -----------------------------------------------------------------------------
+# Routes
+#
+# Evaluated top-to-bottom; first match wins. Pattern matching uses glob syntax
+# (same as ripgrep's globset). `remap` optionally rewrites the model id before
+# sending it upstream (useful when provider names differ from Claude Code's).
+# -----------------------------------------------------------------------------
+routes:
+
+  # Claude models go to Anthropic
+  - models: ["claude-*"]
+    provider: anthropic
+
+  # DeepSeek models
+  - models: ["deepseek-*"]
+    provider: deepseek
+
+  # OpenRouter — they prefix with vendor/
+  - models: ["openrouter/*", "*/*"]
+    provider: openrouter
+
+  # OpenCode custom endpoint
+  - models: ["opencode-*"]
+    provider: opencode
+
+  # OpenAI families (with translation layer)
+  - models: ["gpt-*", "o1-*", "o3-*", "o4-*"]
+    provider: custom-openai
+    remap:
+      # Map Claude Code's name → upstream's actual id, if they differ
+      # "gpt-5": "gpt-5-preview"
+
+  # Default fallback — anything unknown goes to Anthropic
+  - models: ["*"]
+    provider: anthropic
