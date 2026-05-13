@@ -26,7 +26,7 @@ pub enum Command {
     /// production; for local development just invoke it directly.
     Run {
         /// Path to the YAML config. `~` is expanded.
-        #[arg(short, long, default_value = "~/.open-interceptor/config.yaml")]
+        #[arg(short, long, default_value = "~/.config/open-interceptor/config.yaml")]
         config: PathBuf,
     },
 
@@ -73,8 +73,7 @@ pub async fn dispatch(cmd: Command) -> anyhow::Result<()> {
     }
 }
 
-/// Foreground run: load config, log a summary, then (Phase 1 WIP) hand off
-/// to the Axum proxy server.
+/// Foreground run: load config, build router, start the Axum server.
 async fn run(config_path: &Path) -> anyhow::Result<()> {
     let path = expand_tilde(config_path);
     let config = crate::config::Config::load(&path).map_err(|e| {
@@ -88,13 +87,12 @@ async fn run(config_path: &Path) -> anyhow::Result<()> {
         "config loaded",
     );
 
-    // TODO(T1.5): proxy::serve(config).await — for now this just verifies
-    // that the config parses and exits.
-    tracing::warn!(
-        "proxy server not implemented yet (T1.5). Config validated, exiting."
+    let router = std::sync::Arc::new(
+        crate::router::Router::build(config)
+            .map_err(|e| anyhow::anyhow!("router build failed: {e}"))?,
     );
 
-    Ok(())
+    crate::proxy::serve(router).await
 }
 
 /// Validate a config file without starting anything. Phase 4 stub that

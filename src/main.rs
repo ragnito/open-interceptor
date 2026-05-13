@@ -11,6 +11,8 @@ use tracing_subscriber::EnvFilter;
 mod cli;
 mod config;
 mod providers;
+mod proxy;
+mod router;
 mod translate;
 
 #[tokio::main]
