@@ -164,14 +164,27 @@ fn main() {
                 *control_flow = ControlFlow::WaitUntil(next_poll);
 
             } else if id == &logs_id {
-                let log = home_dir()
+                let log_dir = home_dir()
                     .join("Library")
                     .join("Logs")
-                    .join("open-interceptor")
-                    .join("stderr.log");
-                let _ = std::process::Command::new("open")
-                    .arg(&log)
-                    .spawn();
+                    .join("open-interceptor");
+                // tracing-appender writes open-interceptor.YYYY-MM-DD.log;
+                // launchd also redirects stderr to stderr.log. Pick the
+                // most recently modified file in the directory.
+                let best = most_recent_log(&log_dir);
+                match best {
+                    Some(path) => {
+                        // -t forces TextEdit — always shows the content,
+                        // unlike Console.app which may ignore plain files.
+                        let _ = std::process::Command::new("open")
+                            .args(["-t", path.to_str().unwrap_or("")])
+                            .spawn();
+                    }
+                    None => {
+                        item_status.set_text("No logs yet");
+                        *last_label.lock().unwrap() = String::new(); // reset so next poll refreshes it
+                    }
+                }
 
             } else if id == &config_id {
                 let cfg = home_dir()
@@ -187,6 +200,25 @@ fn main() {
             let _ = &last_label_evt;
         }
     });
+}
+
+/// Return the most recently modified `.log` file in `dir`, or `None` if
+/// the directory is missing or empty.
+fn most_recent_log(dir: &std::path::Path) -> Option<std::path::PathBuf> {
+    let entries = std::fs::read_dir(dir).ok()?;
+    let mut best: Option<(std::time::SystemTime, std::path::PathBuf)> = None;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("log") {
+            continue;
+        }
+        if let Ok(mtime) = entry.metadata().and_then(|m| m.modified()) {
+            if best.as_ref().map_or(true, |(t, _)| mtime > *t) {
+                best = Some((mtime, path));
+            }
+        }
+    }
+    best.map(|(_, p)| p)
 }
 
 /// Locate the `open-interceptor` CLI binary to pass to `daemon::install`.
