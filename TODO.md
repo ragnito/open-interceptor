@@ -77,7 +77,7 @@ Marca cada tarea al completarla y commitea junto al cambio. El detalle técnico 
 - [x] **T4.8** Crear repo `homebrew-tap` separado con formula `open-interceptor.rb`
 - [x] **T4.9** Documentar instalación en README: `brew install`, `open-interceptor start`, setup env vars
 - [x] **T4.10** Test end-to-end con instalación limpia ✅
-- [ ] **T4.11** Tag `v1.0.0` y release pública
+- [x] **T4.11** Tag `v1.0.0` y release pública ✅
 
 ## Phase 5 — Hardening post-MVP (continuo)
 
