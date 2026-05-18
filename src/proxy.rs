@@ -246,11 +246,15 @@ fn anthropic_error(status: StatusCode, kind: &str, message: &str) -> Response {
 fn map_anthropic_error(provider_name: &str, err: providers::anthropic::ForwardError) -> Response {
     use providers::anthropic::ForwardError as E;
     match err {
-        E::Upstream(e) => anthropic_error(
-            StatusCode::BAD_GATEWAY,
-            "api_error",
-            &format!("upstream `{provider_name}` failed: {e}"),
-        ),
+        E::Upstream(e) => {
+            // Distinguish transport failures: timeout → 504, everything else → 502.
+            let (status, kind) = if e.is_timeout() {
+                (StatusCode::GATEWAY_TIMEOUT, "timeout_error")
+            } else {
+                (StatusCode::BAD_GATEWAY, "api_error")
+            };
+            anthropic_error(status, kind, &format!("upstream `{provider_name}` failed: {e}"))
+        }
         E::MissingApiKey => anthropic_error(
             StatusCode::INTERNAL_SERVER_ERROR,
             "config_error",
@@ -289,11 +293,14 @@ fn map_openai_error(
                 &format!("upstream `{provider_name}` returned {status}: {}", &body.chars().take(300).collect::<String>()),
             )
         }
-        E::Upstream(e) => anthropic_error(
-            StatusCode::BAD_GATEWAY,
-            "api_error",
-            &format!("upstream `{provider_name}` transport error: {e}"),
-        ),
+        E::Upstream(e) => {
+            let (status, kind) = if e.is_timeout() {
+                (StatusCode::GATEWAY_TIMEOUT, "timeout_error")
+            } else {
+                (StatusCode::BAD_GATEWAY, "api_error")
+            };
+            anthropic_error(status, kind, &format!("upstream `{provider_name}` transport error: {e}"))
+        }
         E::RequestParse(e) => anthropic_error(
             StatusCode::BAD_REQUEST,
             "invalid_request_error",

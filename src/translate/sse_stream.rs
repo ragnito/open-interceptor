@@ -99,6 +99,10 @@ struct State {
     /// Final usage stats, if upstream emits a usage object (only on the
     /// final chunk with most providers).
     usage: Option<o::UsageStats>,
+    /// Accumulated output characters across all text + tool argument
+    /// deltas. Used to estimate output_tokens when the upstream omits
+    /// the usage object entirely (T1.9).
+    output_chars: usize,
 }
 
 #[derive(Clone, Copy)]
@@ -129,6 +133,7 @@ impl State {
             tool_index_map: HashMap::new(),
             finish_reason: None,
             usage: None,
+            output_chars: 0,
         }
     }
 
@@ -192,6 +197,7 @@ impl State {
         if let Some(content) = choice.delta.content
             && !content.is_empty()
         {
+            self.output_chars += content.len();
             self.ensure_text_block(out);
             if let Some(Current::Text { index }) = self.current {
                 out.push(a::SseEvent::ContentBlockDelta {
@@ -293,6 +299,7 @@ impl State {
             && let Some(args) = func.arguments
             && !args.is_empty()
         {
+            self.output_chars += args.len();
             out.push(a::SseEvent::ContentBlockDelta {
                 index: anthropic_index,
                 delta: a::ContentBlockDelta::InputJsonDelta { partial_json: args },
@@ -326,7 +333,22 @@ impl State {
                 cache_creation_input_tokens: None,
                 cache_read_input_tokens: None,
             })
-            .unwrap_or_default();
+            .unwrap_or_else(|| {
+                // Provider did not emit a usage object. Estimate output tokens
+                // from accumulated character count (4 chars ≈ 1 token).
+                let estimated = ((self.output_chars as f64) / 4.0).ceil() as u32;
+                tracing::debug!(
+                    output_chars = self.output_chars,
+                    estimated_output_tokens = estimated,
+                    "upstream omitted usage — using character-based estimate",
+                );
+                a::Usage {
+                    input_tokens: 0,
+                    output_tokens: estimated,
+                    cache_creation_input_tokens: None,
+                    cache_read_input_tokens: None,
+                }
+            });
 
         out.push(a::SseEvent::MessageDelta {
             delta: a::MessageDeltaPayload {
