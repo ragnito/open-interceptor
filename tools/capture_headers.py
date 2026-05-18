@@ -114,7 +114,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         self._capture()
-        if self.path == "/v1/models":
+        if self.path == "/models":
             payload = {"data": [{"id": "mock-model", "type": "model"}]}
             data = json.dumps(payload).encode()
             self.send_response(200)

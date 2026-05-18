@@ -10,7 +10,7 @@ Marca cada tarea al completarla y commitea junto al cambio. El detalle técnico 
   - Lista trazable de tareas. Se actualiza commit a commit.
 - [x] **T0.2** Crear `CLAUDE.md` en la raíz enlazando `TODO.md` y el plan
   - Punto de entrada para futuras sesiones de Claude Code en este repo.
-- [ ] **T0.3** `cargo init --name open-interceptor` y commit inicial
+- [x] **T0.3** `cargo init --name open-interceptor` y commit inicial
   - Base del crate binario.
 - [x] **T0.4** Configurar `Cargo.toml` con dependencias core: `tokio` (full), `axum` 0.8, `hyper` 1, `reqwest` 0.12 (rustls-tls, stream, json), `serde` (derive), `serde_json`, `serde_yml` (en lugar de serde_yaml deprecated), `clap` v4 (derive), `tracing`, `tracing-subscriber` (env-filter), `tracing-appender`, `globset`, `shellexpand`, `anyhow`, `thiserror`, `eventsource-stream`, `futures`, `tokio-util` (rt)
   - `[profile.release]`: `lto = "fat"`, `codegen-units = 1`, `strip = true`, `opt-level = 3`, `panic = "abort"` — binario stripped, optimizado para tamaño + velocidad.
@@ -41,45 +41,42 @@ Marca cada tarea al completarla y commitea junto al cambio. El detalle técnico 
 
 ## Phase 2 — Endpoint `/v1/models` (1-2 días)
 
-- [ ] **T2.1** `src/models_endpoint.rs`: handler `GET /v1/models` que retorna JSON Anthropic-shape `{ data: [{ id, type: "model", display_name }] }`
-- [ ] **T2.2** Extender `config.rs`: campo opcional `models: Vec<String>` por provider en el YAML (lista estática)
-- [ ] **T2.3** Opción dinámica: si el provider no declara `models`, hacer fetch real al `/v1/models` del provider y cachear en memoria con TTL configurable (default 1h)
-- [ ] **T2.4** Registrar la ruta en `proxy.rs`
-- [ ] **T2.5** Test: `curl http://127.0.0.1:3300/v1/models | jq` muestra union; en Claude Code el tab-completion de `/model` lista todos
-- [ ] **T2.6** Documentar en README la variable `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1`
-- [ ] **T2.7** Tag `v0.2.0-phase2`
+- [x] **T2.1** `src/models_endpoint.rs` con handler Anthropic-shape `{ data: [{ id, type: "model", display_name }] }`
+- [x] **T2.2** Campo `models: Vec<String>` por provider en `config.rs` (ya existía desde T1.1)
+- [x] **T2.3** Dynamic fetch: si provider no tiene `models:`, fetchear `/v1/models` real (solo `anthropic_compatible`) y cachear con TTL 1h
+- [x] **T2.4** Ruta registrada en `proxy.rs` via `AppState`
+- [x] **T2.5** Test manual: `curl http://127.0.0.1:3300/v1/models | jq`, verificar que Claude Code lista los modelos en el picker
+- [x] **T2.6** Documentado `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1` en README
+- [x] **T2.7** Tag `v0.2.0-phase2`
+- [x] **T2.8** `context_window` y `max_output_tokens` por modelo en `config.yaml`. `ModelSpec` reemplaza `Vec<String>` en `Provider.models`. `ModelEntry` emite los campos en `/v1/models` (skip-if-none). Dynamic fetch parsea `context_window` del upstream. Claude Code muestra el budget correcto en `/context` por modelo.
 
 ## Phase 3 — Translation layer OpenAI ↔ Anthropic (semana 2)
 
-- [ ] **T3.1** `src/translate/types_anthropic.rs`: structs serde para `MessagesRequest`, `Message`, `ContentBlock` (enum tagged: `text`, `image`, `tool_use`, `tool_result`, `thinking`), `MessagesResponse`, eventos SSE (`message_start`, `content_block_start`, `content_block_delta`, `content_block_stop`, `message_delta`, `message_stop`, `ping`)
-- [ ] **T3.2** `src/translate/types_openai.rs`: structs para `ChatCompletionRequest`, `ChatMessage` (con `role`, `content`, `tool_calls`, `tool_call_id`), `Tool`, `ChatCompletionResponse`, chunks SSE (`ChatCompletionChunk` con `choices[].delta`)
-- [ ] **T3.3** `src/translate/req_anthropic_to_openai.rs`: función `convert(req)` que:
-  - Convierte `system` field → mensaje `role: system`
-  - Para cada `Message` Anthropic, aplana content blocks: `text` se concatena; `tool_use` → `tool_calls[]` en mensaje assistant; `tool_result` → mensaje separado `role: tool` con `tool_call_id`; `thinking` se descarta
-  - Convierte `tools[]` (Anthropic) → `tools[]` (OpenAI), respetando el campo `input_schema` → `parameters`
-  - Mapea `max_tokens`, `temperature`, `top_p`, `stop_sequences` → `stop`
-- [ ] **T3.4** `src/translate/resp_openai_to_anthropic.rs::convert_non_streaming()`: toma `ChatCompletionResponse` y produce `MessagesResponse` válido. Mapea `finish_reason`: `stop` → `end_turn`, `length` → `max_tokens`, `tool_calls` → `tool_use`.
-- [ ] **T3.5** `src/translate/resp_openai_to_anthropic.rs::convert_streaming()`: toma `impl Stream<Item = OpenAIChunk>` y emite `impl Stream<Item = AnthropicSSEEvent>`. Mantener estado: índice de content block actual, si está dentro de un tool_use, accumular argumentos JSON de tool calls.
-- [ ] **T3.6** `src/translate/tool_translation.rs`: helpers compartidos para conversion bidireccional de tool definitions y resultados
-- [ ] **T3.7** `src/providers/openai.rs`: pipeline completo (parse → translate request → POST upstream → translate response/stream → emit)
-- [ ] **T3.8** Snapshot tests con `insta`: capturar 5 payloads reales de Claude Code (mensaje simple, con tool use, con tool result, con system prompt largo, streaming) y verificar que la traducción a OpenAI es consistente
-- [ ] **T3.9** Cancelación: cuando el cliente cierra la conexión SSE, propagar drop al stream upstream con `tokio_util::sync::CancellationToken`
-- [ ] **T3.10** Test manual: con OpenAI API key real, `/model gpt-4o` dentro de Claude Code; verificar mensaje simple, tool use (bash + read file), streaming largo
-- [ ] **T3.11** Test manual con un endpoint OpenAI-compatible alternativo (Groq, Together, etc.)
-- [ ] **T3.12** Tag `v0.3.0-phase3`
+- [x] **T3.1** `src/translate/types_anthropic.rs`: structs para MessagesRequest/Response, ContentBlock, SSE events
+- [x] **T3.2** `src/translate/types_openai.rs`: structs para ChatCompletionRequest/Response, streaming chunks
+- [x] **T3.3** `src/translate/req_anthropic_to_openai.rs`: conversión Anthropic→OpenAI (system, messages, tools, tool_choice, stop_sequences)
+- [x] **T3.4** `src/translate/resp_openai_to_anthropic.rs::convert_non_streaming()`: OpenAI→Anthropic non-streaming
+- [x] **T3.5** `src/translate/sse_stream.rs`: streaming SSE conversion con state machine (text blocks, tool call argument reassembly)
+- [x] **T3.6** `tool_translation.rs` — no necesario: traducción de tools inline en los módulos req/resp
+- [x] **T3.7** `src/providers/openai.rs`: pipeline completo non-streaming + streaming con SSE translator integrado
+- [x] **T3.8** Snapshot tests con `insta`: 8 snapshots (req translation simple/complejo/tool calls, response text/tool/multiple tools, SSE text-only/text+tool). 68 tests total.
+- [x] **T3.9** Cancelación SSE: el drop del Body de Axum se propaga al stream → bytes_stream → Response de reqwest, abortando upstream automáticamente. Documentado en `providers/openai.rs`.
+- [x] **T3.10** Test manual: con OpenAI API key real, `/model gpt-4o` dentro de Claude Code ✅
+- [x] **T3.11** Test manual con endpoint OpenAI-compatible alternativo (OpenCode Go / DeepSeek V4 Pro) ✅ non-streaming + streaming OK
+- [x] **T3.12** Tag `v0.3.0-phase3`
 
 ## Phase 4 — Daemon + CLI completa + Homebrew (semana 3)
 
-- [ ] **T4.1** `src/daemon.rs::install()`: escribe `~/Library/LaunchAgents/com.open-interceptor.plist` con `RunAtLoad=true`, `KeepAlive=true`, `StandardOutPath` y `StandardErrorPath` en `~/.open-interceptor/logs/`
-- [ ] **T4.2** `daemon::start()` con `launchctl load`, `stop()` con `launchctl unload`, `status()` que parsea `launchctl list` + check del puerto con `TcpStream::connect`
-- [ ] **T4.3** Completar `cli.rs`: subcomandos `start`, `stop`, `status`, `config edit`, `config validate`, `logs [--follow]`
-- [ ] **T4.4** Rotación de logs con `tracing-appender` daily, retener últimos 7 días
-- [ ] **T4.5** Mensaje de error claro si puerto 3300 está ocupado, con instrucción de cambiar `port` en config
-- [ ] **T4.6** `com.open-interceptor.plist.tmpl` con placeholders para path del binario
-- [ ] **T4.7** GitHub Actions: workflow `release.yml` que cross-compila arm64 (apple-darwin) y x86_64 (apple-darwin) en `macos-latest` runner, sube binarios a la release
-- [ ] **T4.8** Crear repo `homebrew-tap` separado con formula `open-interceptor.rb` apuntando a los binarios precompilados de GitHub Releases
-- [ ] **T4.9** Documentar instalación en README: `brew install <tap>/open-interceptor`, `open-interceptor start`, setup de `ANTHROPIC_BASE_URL`
-- [ ] **T4.10** Test end-to-end con instalación limpia: `brew install`, `open-interceptor start`, reiniciar máquina, verificar que sigue corriendo
+- [x] **T4.1** `src/daemon.rs::install()`: escribe plist en `~/Library/LaunchAgents/com.open-interceptor.plist`
+- [x] **T4.2** `daemon::start()` con `launchctl bootstrap`, `stop()` con `launchctl bootout`, `status()` con `launchctl print` + check TCP
+- [x] **T4.3** CLI completa: `start [--install] [--binary]`, `stop`, `status`, `logs [--follow]`, `config [--config]`
+- [x] **T4.4** Rotación de logs con `tracing-appender` daily, retener últimos 7 días
+- [x] **T4.5** Error claro si puerto ocupado (ya en `proxy.rs` desde T1.5)
+- [x] **T4.6** Plist generado programáticamente en `daemon.rs` con placeholders rellenos
+- [x] **T4.7** GitHub Actions `release.yml`: build arm64 + x64 macos, upload a GitHub Release
+- [x] **T4.8** Crear repo `homebrew-tap` separado con formula `open-interceptor.rb`
+- [x] **T4.9** Documentar instalación en README: `brew install`, `open-interceptor start`, setup env vars
+- [x] **T4.10** Test end-to-end con instalación limpia ✅
 - [ ] **T4.11** Tag `v1.0.0` y release pública
 
 ## Phase 5 — Hardening post-MVP (continuo)
