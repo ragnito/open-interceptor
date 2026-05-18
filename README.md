@@ -55,25 +55,65 @@ sudo cp target/release/open-interceptor /usr/local/bin/
 open-interceptor start --install --binary /usr/local/bin/open-interceptor
 ```
 
-## CLI reference
-
-```
-open-interceptor run --config <path>     foreground server
-open-interceptor start --install          install + start launchd daemon
-open-interceptor start                     start daemon (already installed)
-open-interceptor stop                      stop daemon
-open-interceptor status                    check if daemon is running
-open-interceptor logs --follow             tail live logs
-open-interceptor logs                      last 20 log lines
-open-interceptor config --config <path>   validate config
-```
-
 ## Usage
 
-In a terminal with `ANTHROPIC_BASE_URL` set:
+### The easy way: `open-interceptor claude`
 
 ```bash
+open-interceptor claude
+```
+
+That's it. The command:
+1. Checks if the proxy is running on port 3300.
+2. If not, installs the launchd plist (first time only) and starts the daemon automatically.
+3. Injects `ANTHROPIC_BASE_URL=http://127.0.0.1:3300` and `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1`.
+4. Replaces the process image with the real `claude` binary — TTY, signals, and exit code are preserved exactly.
+
+Pass any Claude Code flags through verbatim:
+
+```bash
+open-interceptor claude --model claude-opus-4-7
+open-interceptor claude --debug
+```
+
+No more exporting env vars manually. Works like `ollama run`.
+
+### Menu-bar app
+
+Build and install the native macOS status-bar app:
+
+```bash
+tools/bundle-app.sh
+# Then drag "Open Interceptor.app" to /Applications
+```
+
+The app:
+- Appears in the **top-right menu bar** with no Dock icon (`LSUIElement`).
+- Shows `● Running` / `○ Stopped` and polls the proxy port every 5 seconds.
+- **Start** / **Stop** toggle the launchd daemon.
+- The proxy keeps running even after you quit the app (launchd-managed).
+- **View Logs** / **Open Config** open the log file and config YAML.
+
+### Manual (existing workflow)
+
+```bash
+export ANTHROPIC_BASE_URL=http://127.0.0.1:3300
+export CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1
 claude
+```
+
+### CLI reference
+
+```
+open-interceptor claude [args...]         run claude with proxy auto-started
+open-interceptor run --config <path>      foreground server
+open-interceptor start --install          install + start launchd daemon
+open-interceptor start                    start daemon (already installed)
+open-interceptor stop                     stop daemon
+open-interceptor status                   check if daemon is running
+open-interceptor logs --follow            tail live logs
+open-interceptor logs                     last 20 log lines
+open-interceptor config --config <path>   validate config
 ```
 
 Inside Claude Code use `/model <name>` to switch providers. If `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1` is set, `/model` (with no argument) opens a picker listing all models from all configured providers.

@@ -6,6 +6,23 @@ description = "Local proxy that intercepts Claude Code traffic and auto-routes t
 license = "MIT"
 repository = "https://github.com/ragnito/open-interceptor"
 
+[lib]
+name = "open_interceptor"
+path = "src/lib.rs"
+
+[[bin]]
+name = "open-interceptor"
+path = "src/main.rs"
+
+[[bin]]
+name = "open-interceptor-menubar"
+path = "src/bin/menubar.rs"
+required-features = ["menubar"]
+
+[features]
+default = []
+menubar = ["dep:tray-icon", "dep:tao", "dep:muda", "dep:png"]
+
 [dependencies]
 anyhow = "1.0.102"
 async-stream = "0.3.6"
@@ -27,6 +44,10 @@ tokio-util = { version = "0.7.18", features = ["rt"] }
 tracing = "0.1.44"
 tracing-appender = "0.2.5"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+tray-icon = { version = "0.24", optional = true }
+tao        = { version = "0.35", optional = true }
+muda       = { version = "0.19", optional = true }
+png        = { version = "0.17", optional = true }
 
 [profile.release]
 lto = "fat"

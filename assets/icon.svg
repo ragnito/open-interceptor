@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- open-interceptor app icon — placeholder. Replace with final design.
+     To regenerate icon-1024.png from this SVG:
+       rsvg-convert -w 1024 -h 1024 icon.svg -o icon-1024.png
+     Then run tools/make-icons.sh -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!-- Rounded square background -->
+  <rect x="0" y="0" width="1024" height="1024" rx="220" ry="220" fill="#1a1a2e"/>
+
+  <!-- Outer ring -->
+  <circle cx="512" cy="512" r="340" fill="none" stroke="#6c63ff" stroke-width="48"/>
+
+  <!-- Arrow pointing right (intercept / route) -->
+  <polyline points="300,512 724,512" fill="none" stroke="#ffffff" stroke-width="56" stroke-linecap="round"/>
+  <polygon points="724,412 860,512 724,612" fill="#ffffff"/>
+
+  <!-- Small dot indicating proxy interception -->
+  <circle cx="512" cy="512" r="52" fill="#6c63ff"/>
+  <circle cx="512" cy="512" r="28" fill="#ffffff"/>
+</svg>

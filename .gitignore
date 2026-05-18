@@ -24,3 +24,14 @@
 # Runtime artifacts
 *.log
 ~/.open-interceptor/
+
+# Generated icon assets (produced by tools/make-icons.sh)
+assets/AppIcon.iconset/
+assets/AppIcon.icns
+assets/menubar-template.png
+assets/menubar-template@2x.png
+assets/menubar-active.png
+assets/menubar-active@2x.png
+
+# .app bundle (produced by tools/bundle-app.sh)
+*.app/

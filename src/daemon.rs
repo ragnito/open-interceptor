@@ -14,6 +14,7 @@ use anyhow::Context;
 
 const SERVICE_LABEL: &str = "com.open-interceptor";
 const PLIST_FILENAME: &str = "com.open-interceptor.plist";
+pub const PROXY_PORT: u16 = 3300;
 
 /// Path to the launchd plist in the user's Library.
 fn plist_path() -> PathBuf {
@@ -43,6 +44,21 @@ fn daemon_config_path() -> PathBuf {
 fn daemon_log_dir() -> PathBuf {
     let home = dirs_home();
     home.join("Library").join("Logs").join("open-interceptor")
+}
+
+/// Returns `true` if the proxy is accepting connections on the local port.
+/// Does NOT check launchd — only the TCP socket. Fast (2 s timeout).
+pub fn probe() -> bool {
+    std::net::TcpStream::connect_timeout(
+        &std::net::SocketAddr::from(([127, 0, 0, 1], PROXY_PORT)),
+        std::time::Duration::from_secs(2),
+    )
+    .is_ok()
+}
+
+/// Returns `true` if the launchd plist is installed.
+pub fn is_installed() -> bool {
+    plist_path().exists()
 }
 
 /// Generate and write the launchd plist that defines the background
@@ -195,15 +211,9 @@ pub fn status() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    // Try to connect to the proxy port to confirm it's serving.
-    let port_check = std::net::TcpStream::connect_timeout(
-        &std::net::SocketAddr::from(([127, 0, 0, 1], 3300)),
-        std::time::Duration::from_secs(2),
-    );
-
-    match port_check {
-        Ok(_) => println!("running: http://127.0.0.1:3300"),
-        Err(_) => println!("process running but port 3300 not reachable yet"),
+    match probe() {
+        true => println!("running: http://127.0.0.1:{PROXY_PORT}"),
+        false => println!("process running but port {PROXY_PORT} not reachable yet"),
     }
 
     Ok(())

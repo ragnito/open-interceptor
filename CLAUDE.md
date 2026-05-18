@@ -16,14 +16,30 @@ El usuario configura `ANTHROPIC_BASE_URL=http://127.0.0.1:3300` una vez y cambia
 
 ## Stack
 
-- **HTTP server**: Axum 0.7 + Hyper 1
+- **HTTP server**: Axum 0.8 + Hyper 1
 - **HTTP client**: Reqwest 0.12 (con rustls-tls + stream)
-- **Runtime**: Tokio multi-thread
+- **Runtime**: Tokio multi-thread (solo en el bin principal; el menubar app usa AppKit event loop)
 - **CLI**: clap v4 derive
 - **Logging**: tracing + tracing-subscriber + tracing-appender
-- **Config**: serde_yaml + shellexpand para `${ENV_VAR}`
+- **Config**: serde_yml + shellexpand para `${ENV_VAR}`
 - **Pattern matching modelos**: globset (mismo crate que ripgrep)
 - **SSE parsing**: eventsource-stream
+- **Menu bar app** (feature `menubar`): tray-icon + tao + muda + png (deps opcionales; NO compilados en el build default)
+
+## Binarios
+
+| Binary | Feature | Descripción |
+|--------|---------|-------------|
+| `open-interceptor` | (default) | Proxy headless + CLI (run/start/stop/status/logs/claude) |
+| `open-interceptor-menubar` | `menubar` | App nativa macOS para la barra de menú |
+
+### Construir la app de menú
+
+```bash
+tools/bundle-app.sh   # produce "Open Interceptor.app" (ad-hoc signed)
+```
+
+El bundle incluye ambos binarios en `Contents/MacOS/`. El menubar app resuelve el CLI hermano para `daemon::install`.
 
 ## Reglas de trabajo en este repo
 
