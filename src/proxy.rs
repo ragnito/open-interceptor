@@ -23,7 +23,7 @@ use serde_json::json;
 use tokio::net::TcpListener;
 
 use crate::domain::config::ProviderType;
-use crate::services::models;
+use crate::services::{health, models};
 use crate::providers;
 use crate::router::Router;
 
@@ -32,6 +32,7 @@ use crate::router::Router;
 struct AppState {
     router: Arc<Router>,
     models: Arc<models::ModelsState>,
+    health: Arc<health::HealthState>,
 }
 
 /// Bind the listener and run the HTTP server until cancelled.
@@ -40,6 +41,7 @@ pub async fn serve(router: Arc<Router>) -> anyhow::Result<()> {
     let addr = format!("127.0.0.1:{port}");
 
     let state = AppState {
+        health: Arc::new(health::HealthState::new(router.clone())),
         models: Arc::new(models::ModelsState::new(router.clone())),
         router: router.clone(),
     };
@@ -48,6 +50,7 @@ pub async fn serve(router: Arc<Router>) -> anyhow::Result<()> {
         .route("/v1/messages", post(handle_messages))
         .route("/v1/messages/count_tokens", post(handle_count_tokens))
         .route("/v1/models", get(handle_models))
+        .route("/healthz", get(handle_healthz))
         .with_state(state);
 
     let listener = TcpListener::bind(&addr)
@@ -87,12 +90,14 @@ async fn handle_count_tokens(
     dispatch(state.router, method, uri, headers, body).await
 }
 
-/// Phase 2: full /v1/models endpoint with static + dynamic model union,
-/// caching, and Anthropic-shape response.
 async fn handle_models(State(state): State<AppState>) -> Response {
     models::handle_models(axum::extract::State(state.models))
         .await
         .into_response()
+}
+
+async fn handle_healthz(State(state): State<AppState>) -> Response {
+    health::handle_healthz(axum::extract::State(state.health)).await
 }
 
 /// Shared dispatch logic between `/v1/messages` and `/v1/messages/count_tokens`.

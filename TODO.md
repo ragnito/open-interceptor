@@ -30,13 +30,13 @@ Marca cada tarea al completarla y commitea junto al cambio. El detalle técnico 
 - [x] **T1.6** Handler `POST /v1/messages/count_tokens` reusando el mismo `dispatch()`. Plus stub `GET /v1/models` que retorna la unión de los `models:` declarados en cada provider (versión final de T2.1-T2.4 ya esbozada).
 - [x] **T1.7** `src/providers/anthropic.rs::forward()` con dos modos según `passthrough_auth`. Validado empíricamente: el mock upstream ve los headers byte-exact (Authorization Bearer completo, anthropic-version, anthropic-beta con `oauth-2025-04-20`, x-app, X-Claude-Code-Session-Id, los 7 X-Stainless-*, User-Agent), el path con `?beta=true` preservado, sin `Via`/`X-Forwarded-*` añadidos. Hop-by-hop dropeados (`Connection`, `Keep-Alive`, `Transfer-Encoding`, `TE`, `Trailer`, `Upgrade`, `Proxy-*`, `Host`, `Content-Length`). En modo API-key sustituye con `x-api-key` y droppea la auth del cliente. 9 unit tests cubriendo todas las ramas. Cliente reqwest compartido vía `OnceLock` con connection pooling.
 - [x] **T1.8** Streaming SSE response con `axum::body::Body::from_stream(upstream.bytes_stream())`. Validado: 6 eventos SSE (`message_start`/`content_block_start`/`content_block_delta`/`content_block_stop`/`message_delta`/`message_stop`) llegan al cliente vía proxy idénticos a los del upstream, con `elapsed_ms=1` (el proxy responde al cliente desde que recibe el primer byte del upstream, sin esperar al `message_stop`). Headers de la response upstream relayed con la misma lista de hop-by-hop dropeados.
-- [ ] **T1.9** `sse_inject_usage()` — **deferred**: el upstream Anthropic real envía `usage` correctamente en `message_delta`. Reactivamos cuando aparezca un provider que omita el campo.
-- [ ] **T1.10** `strip_thinking_blocks()` — **deferred**: por probar contra modelos open-source que no soportan thinking. Hasta entonces no se necesita.
-- [ ] **T1.11** Error handling más fino — **parcialmente hecho**: errores upstream se mapean a 502 con shape Anthropic, errores de config a 500. Retry con backoff queda para v0.1.x.
+- [ ] **T1.9** `sse_inject_usage()` — aprobado: inyectar usage cuando el provider lo omita
+- [ ] **T1.10** `strip_thinking_blocks()` — aprobado: filtrar thinking blocks para providers que no los soportan
+- [ ] **T1.11** Error handling más fino — aprobado: errores upstream mapeados correctamente, mejorar granularidad
 - [ ] **T1.12** Logging — **suficiente para Phase 1**: cada dispatch loguea `model`, `effective_model`, `provider`, `provider_type`, `passthrough_auth`, `body_bytes`, `upstream_status`, `elapsed_ms`. Validado en producción.
 - [x] **T1.13** ✅ E2E real contra `api.anthropic.com` con OAuth Pro/Max passthrough. 13 requests, todas con `upstream_status=200`, conversación multi-turno con tool use confirmada. Anthropic aceptó nuestros requests byte-idénticos.
 - [x] **T1.14** ✅ E2E real contra `https://opencode.ai/zen/go/v1/messages` con MiniMax. Suscripción OpenCode Go funcionando vía nuestro proxy. (Replantea original con DeepSeek — el endpoint anthropic-compatible de DeepSeek directo queda para cuando alguien lo necesite, OpenCode Go ya cubre acceso a DeepSeek V4 Pro/Flash via Phase 3.)
-- [ ] **T1.15** OpenRouter — **deferred**: no probado aún. La integración debería funcionar tal cual (anthropic_compatible). Lo añadimos si surge necesidad real.
+- [~] **T1.15** OpenRouter — descartado por ahora (solo interesa Claude)
 - [x] **T1.16** Tag `v0.1.0-phase1` en git ✅
 
 ## Phase 2 — Endpoint `/v1/models` (1-2 días)
@@ -81,8 +81,8 @@ Marca cada tarea al completarla y commitea junto al cambio. El detalle técnico 
 
 ## Phase 5 — Hardening post-MVP (continuo)
 
-- [ ] **T5.1** Métricas internas: contador de requests por provider, p50/p95/p99 latencia, expuesto en `/metrics` (Prometheus format) opcional
-- [ ] **T5.2** Health check `/healthz` que valida que cada provider configurado responde
-- [ ] **T5.3** Retry con backoff exponencial para errores transitorios 5xx upstream
-- [ ] **T5.4** Soporte de `passthrough_auth: true` validado en todos los providers
-- [ ] **T5.5** Tests de integración con servidor mock (`wiremock-rs`) para evitar depender de APIs reales en CI
+- [~] **T5.1** ~~Métricas internas~~ — descartado
+- [x] **T5.2** Health check `/healthz` que valida que cada provider configurado responde ✅
+- [~] **T5.3** ~~Retry con backoff exponencial~~ — el harness de Claude Code ya lo maneja
+- [x] **T5.4** `passthrough_auth: true` — validado en Anthropic (el único que importa) ✅
+- [~] **T5.5** Tests de integración con servidor mock (`wiremock-rs`) — backlog
