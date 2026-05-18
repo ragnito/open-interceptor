@@ -12,32 +12,43 @@
 use std::sync::Arc;
 
 use axum::{
+    Json,
     body::Bytes,
     extract::State,
     http::{HeaderMap, Method, StatusCode, Uri},
     response::{IntoResponse, Response},
     routing::{get, post},
-    Json,
 };
 use serde_json::json;
 use tokio::net::TcpListener;
 
-use crate::config::ProviderType;
+use crate::domain::config::ProviderType;
+use crate::services::models;
 use crate::providers;
 use crate::router::Router;
+
+/// Shared application state, passed to every handler via Axum's `State`.
+#[derive(Clone)]
+struct AppState {
+    router: Arc<Router>,
+    models: Arc<models::ModelsState>,
+}
 
 /// Bind the listener and run the HTTP server until cancelled.
 pub async fn serve(router: Arc<Router>) -> anyhow::Result<()> {
     let port = router.port();
     let addr = format!("127.0.0.1:{port}");
 
+    let state = AppState {
+        models: Arc::new(models::ModelsState::new(router.clone())),
+        router: router.clone(),
+    };
+
     let app = axum::Router::new()
         .route("/v1/messages", post(handle_messages))
         .route("/v1/messages/count_tokens", post(handle_count_tokens))
-        // /v1/models is part of Phase 2 — stub now so Claude Code's
-        // model-discovery probe doesn't blow up.
-        .route("/v1/models", get(handle_models_stub))
-        .with_state(router.clone());
+        .route("/v1/models", get(handle_models))
+        .with_state(state);
 
     let listener = TcpListener::bind(&addr)
         .await
@@ -55,44 +66,33 @@ pub async fn serve(router: Arc<Router>) -> anyhow::Result<()> {
 }
 
 /// Handler for the main messages endpoint. Extracts the model, picks a
-/// provider, and (for now) returns 501 Not Implemented with an Anthropic-
-/// shaped error body. T1.7 swaps the stub for real dispatch.
+/// provider, and dispatches.
 async fn handle_messages(
-    State(router): State<Arc<Router>>,
+    State(state): State<AppState>,
     method: Method,
     uri: Uri,
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    dispatch(router, method, uri, headers, body).await
+    dispatch(state.router, method, uri, headers, body).await
 }
 
 async fn handle_count_tokens(
-    State(router): State<Arc<Router>>,
+    State(state): State<AppState>,
     method: Method,
     uri: Uri,
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    dispatch(router, method, uri, headers, body).await
+    dispatch(state.router, method, uri, headers, body).await
 }
 
-/// Stub for the /v1/models endpoint. Returns the union of every provider's
-/// declared `models` list, Anthropic-shape. The dynamic-fetch fallback for
-/// providers without a `models:` field is Phase 2 (T2.3).
-async fn handle_models_stub(State(router): State<Arc<Router>>) -> Response {
-    let data: Vec<_> = router
-        .providers()
-        .flat_map(|(_, p)| p.models.iter().cloned())
-        .map(|id| {
-            json!({
-                "type": "model",
-                "id": id,
-                "display_name": id,
-            })
-        })
-        .collect();
-    Json(json!({ "data": data, "first_id": null, "last_id": null, "has_more": false })).into_response()
+/// Phase 2: full /v1/models endpoint with static + dynamic model union,
+/// caching, and Anthropic-shape response.
+async fn handle_models(State(state): State<AppState>) -> Response {
+    models::handle_models(axum::extract::State(state.models))
+        .await
+        .into_response()
 }
 
 /// Shared dispatch logic between `/v1/messages` and `/v1/messages/count_tokens`.
@@ -158,13 +158,8 @@ async fn dispatch(
             }
         }
         ProviderType::OpenaiCompatible => {
-            match providers::openai::forward(
-                resolution.provider,
-                &model,
-                &effective_model,
-                body,
-            )
-            .await
+            match providers::openai::forward(resolution.provider, &model, &effective_model, body)
+                .await
             {
                 Ok(r) => Ok(r),
                 Err(e) => Err(map_openai_error(&provider_name, e)),
@@ -243,10 +238,7 @@ fn anthropic_error(status: StatusCode, kind: &str, message: &str) -> Response {
 
 /// Translate a `providers::anthropic::ForwardError` into the Anthropic-
 /// shaped error response the client receives.
-fn map_anthropic_error(
-    provider_name: &str,
-    err: providers::anthropic::ForwardError,
-) -> Response {
+fn map_anthropic_error(provider_name: &str, err: providers::anthropic::ForwardError) -> Response {
     use providers::anthropic::ForwardError as E;
     match err {
         E::Upstream(e) => anthropic_error(
@@ -279,11 +271,19 @@ fn map_openai_error(
             "config_error",
             &format!("`{provider_name}` is openai_compatible and needs an api_key"),
         ),
-        E::UpstreamError { status, body } => anthropic_error(
-            StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY),
-            "api_error",
-            &format!("upstream `{provider_name}` returned {status}: {body}"),
-        ),
+        E::UpstreamError { status, body } => {
+            tracing::warn!(
+                provider = %provider_name,
+                upstream_status = status,
+                body = %body.chars().take(500).collect::<String>(),
+                "upstream error response"
+            );
+            anthropic_error(
+                StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY),
+                "api_error",
+                &format!("upstream `{provider_name}` returned {status}: {}", &body.chars().take(300).collect::<String>()),
+            )
+        }
         E::Upstream(e) => anthropic_error(
             StatusCode::BAD_GATEWAY,
             "api_error",

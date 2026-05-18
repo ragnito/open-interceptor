@@ -196,12 +196,8 @@ fn translate_assistant_blocks(blocks: &[&a::ContentBlock], out: &mut Vec<o::Chat
                     },
                 });
             }
-            // Thinking blocks → reasoning_content (needed by DeepSeek V4 etc.)
+// Thinking blocks → reasoning_content (needed by DeepSeek V4 etc.)
             a::ContentBlock::Thinking { thinking, .. } => {
-                tracing::debug!(
-                    reasoning_len = thinking.len(),
-                    "request translator: Thinking block → reasoning_content",
-                );
                 reasoning_content = Some(thinking.clone());
             }
             a::ContentBlock::RedactedThinking { data } => {

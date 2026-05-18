@@ -21,7 +21,7 @@ use axum::{
 };
 use reqwest::Client;
 
-use crate::config::Provider;
+use crate::domain::config::Provider;
 use crate::translate::{
     req_anthropic_to_openai, resp_openai_to_anthropic, sse_stream, types_anthropic, types_openai,
 };
@@ -156,7 +156,7 @@ pub async fn forward(
 /// length, presence of reasoning_content, and tool_calls metadata. Used on
 /// the upstream-error path so we can diagnose what the model saw without
 /// dumping prompts verbatim into the logs.
-fn summarize_message_tail(messages: &[types_openai::ChatMessage], n: usize) -> String {
+pub fn summarize_message_tail(messages: &[types_openai::ChatMessage], n: usize) -> String {
     let start = messages.len().saturating_sub(n);
     let mut out = String::new();
     out.push('[');
@@ -205,15 +205,8 @@ fn summarize_message_tail(messages: &[types_openai::ChatMessage], n: usize) -> S
     out
 }
 
-fn build_upstream_url(base: &str) -> String {
-    let base = base.trim_end_matches('/');
-    // If the base already ends with /v1, the provider uses the
-    // standard OpenAI path prefix — just append /chat/completions.
-    if base.ends_with("/v1") {
-        format!("{base}/chat/completions")
-    } else {
-        format!("{base}/v1/chat/completions")
-    }
+pub fn build_upstream_url(base: &str) -> String {
+    format!("{}/chat/completions", base.trim_end_matches('/'))
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -235,21 +228,4 @@ pub enum ForwardError {
 
     #[error("provider needs an api_key configured")]
     MissingApiKey,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn upstream_url_concat() {
-        assert_eq!(
-            build_upstream_url("https://opencode.ai/zen/go"),
-            "https://opencode.ai/zen/go/v1/chat/completions"
-        );
-        assert_eq!(
-            build_upstream_url("https://opencode.ai/zen/go/"),
-            "https://opencode.ai/zen/go/v1/chat/completions"
-        );
-    }
 }

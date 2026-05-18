@@ -236,11 +236,9 @@ pub struct ChoiceDelta {
     #[serde(default)]
     pub content: Option<String>,
     #[serde(default)]
-    pub tool_calls: Vec<ToolCallDelta>,
-    /// DeepSeek V4 and similar thinking-capable models emit this field
-    /// alongside or before `content` when reasoning mode is active.
-    #[serde(default)]
     pub reasoning_content: Option<String>,
+    #[serde(default)]
+    pub tool_calls: Vec<ToolCallDelta>,
 }
 
 /// In streaming mode, OpenAI sends tool calls as a sequence of deltas
