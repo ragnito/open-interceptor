@@ -15,10 +15,10 @@ use tracing_subscriber::util::SubscriberInitExt;
 mod cli;
 mod daemon;
 mod domain;
+mod providers;
+mod proxy;
 mod router;
 mod services;
-mod proxy;
-mod providers;
 mod translate;
 
 #[tokio::main]
@@ -56,7 +56,10 @@ fn init_tracing() -> tracing_appender::non_blocking::WorkerGuard {
 
     // ---- rolling file layer: daily rotation, retain 7 days -----------
     // macOS standard location for user-space daemon logs
-    let log_dir = dirs_home().join("Library").join("Logs").join("open-interceptor");
+    let log_dir = dirs_home()
+        .join("Library")
+        .join("Logs")
+        .join("open-interceptor");
     let _ = std::fs::create_dir_all(&log_dir);
 
     let file_appender = tracing_appender::rolling::RollingFileAppender::builder()

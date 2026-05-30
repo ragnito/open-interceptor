@@ -7,8 +7,9 @@
 //!   status  — check daemon health
 //!   logs    — tail daemon logs
 //!   config  — validate a config file
-//!   claude  — run `claude` with proxy auto-started and env vars injected
-//!   config edit — interactive TUI config editor (Phase 5)
+//!   claude      — run `claude` with proxy auto-started and env vars injected
+//!   claude-app  — launch Claude.app desktop with proxy env vars
+//!   config-edit — interactive TUI config editor (Phase 5)
 
 use std::path::{Path, PathBuf};
 
@@ -83,6 +84,10 @@ pub enum Command {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
+
+    /// Launch the Claude desktop app with ANTHROPIC_BASE_URL injected
+    /// so it routes through the local proxy.
+    ClaudeApp,
 }
 
 /// Entrypoint called from `main` after parsing args.
@@ -96,6 +101,7 @@ pub async fn dispatch(cmd: Command) -> anyhow::Result<()> {
         Command::Config { config } => validate(&config),
         Command::ConfigEdit { config } => config_edit(&config),
         Command::Claude { args } => do_claude(args).await,
+        Command::ClaudeApp => do_claude_app().await,
     }
 }
 
@@ -112,7 +118,10 @@ fn do_start(install_first: bool, binary_path: Option<String>) -> anyhow::Result<
 }
 
 fn do_logs(follow: bool) -> anyhow::Result<()> {
-    let log_dir = dirs_home().join("Library").join("Logs").join("open-interceptor");
+    let log_dir = dirs_home()
+        .join("Library")
+        .join("Logs")
+        .join("open-interceptor");
     if !log_dir.exists() {
         anyhow::bail!("log directory not found: {}", log_dir.display());
     }
@@ -169,6 +178,47 @@ async fn run(config_path: &Path) -> anyhow::Result<()> {
     crate::proxy::serve(router).await
 }
 
+/// Ensure the proxy daemon is running, auto-starting it if needed.
+async fn ensure_daemon_running() -> anyhow::Result<()> {
+    if daemon::probe() {
+        return Ok(());
+    }
+
+    eprintln!("open-interceptor: proxy not running — starting...");
+
+    if !daemon::is_installed() {
+        let exe =
+            std::env::current_exe().context("could not determine current executable path")?;
+        let exe = exe
+            .canonicalize()
+            .context("could not canonicalize current executable path")?;
+        let exe_str = exe.to_string_lossy();
+        daemon::install(&exe_str).context("failed to install launchd plist")?;
+    }
+
+    daemon::start().context("failed to start proxy daemon")?;
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    loop {
+        if daemon::probe() {
+            break;
+        }
+        if std::time::Instant::now() >= deadline {
+            anyhow::bail!(
+                "proxy did not start within 15 s.\n\
+                 Check logs:  open-interceptor logs\n\
+                 Plist:       ~/Library/LaunchAgents/com.open-interceptor.plist"
+            );
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    }
+    eprintln!(
+        "open-interceptor: proxy ready at http://127.0.0.1:{}",
+        daemon::PROXY_PORT
+    );
+    Ok(())
+}
+
 /// `open-interceptor claude [args...]` — Ollama-style wrapper.
 ///
 /// 1. Ensures the proxy is up (auto-starts if needed).
@@ -176,40 +226,7 @@ async fn run(config_path: &Path) -> anyhow::Result<()> {
 /// 3. Replaces the process image with the real `claude` binary (preserves
 ///    TTY, signals, exit code).
 async fn do_claude(args: Vec<String>) -> anyhow::Result<()> {
-    // Auto-start if the port isn't accepting connections.
-    if !daemon::probe() {
-        eprintln!("open-interceptor: proxy not running — starting...");
-
-        if !daemon::is_installed() {
-            let exe = std::env::current_exe()
-                .context("could not determine current executable path")?;
-            let exe = exe
-                .canonicalize()
-                .context("could not canonicalize current executable path")?;
-            let exe_str = exe.to_string_lossy();
-            daemon::install(&exe_str)
-                .context("failed to install launchd plist")?;
-        }
-
-        daemon::start().context("failed to start proxy daemon")?;
-
-        // Poll until the port is ready (up to 15 s).
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
-        loop {
-            if daemon::probe() {
-                break;
-            }
-            if std::time::Instant::now() >= deadline {
-                anyhow::bail!(
-                    "proxy did not start within 15 s.\n\
-                     Check logs:  open-interceptor logs\n\
-                     Plist:       ~/Library/LaunchAgents/com.open-interceptor.plist"
-                );
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
-        }
-        eprintln!("open-interceptor: proxy ready at http://127.0.0.1:{}", daemon::PROXY_PORT);
-    }
+    ensure_daemon_running().await?;
 
     // Locate the real `claude` binary via PATH.
     let claude_path = find_in_path("claude").ok_or_else(|| {
@@ -223,14 +240,13 @@ async fn do_claude(args: Vec<String>) -> anyhow::Result<()> {
     if let (Ok(them), Ok(us)) = (
         claude_path.canonicalize(),
         std::env::current_exe().and_then(|p| p.canonicalize()),
-    ) {
-        if them == us {
-            anyhow::bail!(
-                "`claude` on PATH resolves to `open-interceptor` itself — \
-                 that would cause infinite recursion. \
-                 Fix your PATH so the real Claude Code binary comes first."
-            );
-        }
+    ) && them == us
+    {
+        anyhow::bail!(
+            "`claude` on PATH resolves to `open-interceptor` itself — \
+             that would cause infinite recursion. \
+             Fix your PATH so the real Claude Code binary comes first."
+        );
     }
 
     // Inject the proxy env vars. Safety: we are about to exec() — no other
@@ -262,6 +278,53 @@ async fn do_claude(args: Vec<String>) -> anyhow::Result<()> {
     }
 }
 
+/// `open-interceptor claude-app` — launch Claude desktop with proxy env vars.
+///
+/// macOS GUI apps don't inherit shell environment variables. We use
+/// `launchctl setenv` to inject them into the GUI session domain,
+/// launch the app with `open -a`, then clean up.
+async fn do_claude_app() -> anyhow::Result<()> {
+    ensure_daemon_running().await?;
+
+    let base_url = format!("http://127.0.0.1:{}", daemon::PROXY_PORT);
+
+    std::process::Command::new("launchctl")
+        .args(["setenv", "ANTHROPIC_BASE_URL", &base_url])
+        .status()
+        .context("failed to run launchctl setenv")?;
+
+    std::process::Command::new("launchctl")
+        .args([
+            "setenv",
+            "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY",
+            "1",
+        ])
+        .status()
+        .context("failed to run launchctl setenv")?;
+
+    let status = std::process::Command::new("open")
+        .args(["-a", "Claude"])
+        .status()
+        .context("failed to launch Claude.app")?;
+
+    if !status.success() {
+        anyhow::bail!("`open -a Claude` failed — is Claude.app installed in /Applications?");
+    }
+
+    eprintln!("open-interceptor: Claude.app launched with proxy at {base_url}");
+
+    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+
+    let _ = std::process::Command::new("launchctl")
+        .args(["unsetenv", "ANTHROPIC_BASE_URL"])
+        .status();
+    let _ = std::process::Command::new("launchctl")
+        .args(["unsetenv", "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"])
+        .status();
+
+    Ok(())
+}
+
 /// Walk `PATH` and return the first executable named `name`.
 fn find_in_path(name: &str) -> Option<std::path::PathBuf> {
     let path_var = std::env::var_os("PATH")?;
@@ -272,10 +335,10 @@ fn find_in_path(name: &str) -> Option<std::path::PathBuf> {
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
-                if let Ok(meta) = std::fs::metadata(&candidate) {
-                    if meta.permissions().mode() & 0o111 != 0 {
-                        return Some(candidate);
-                    }
+                if let Ok(meta) = std::fs::metadata(&candidate)
+                    && meta.permissions().mode() & 0o111 != 0
+                {
+                    return Some(candidate);
                 }
             }
             #[cfg(not(unix))]
@@ -387,5 +450,11 @@ mod tests {
             Command::Claude { args } => assert_eq!(args, vec!["--debug", "--no-cache"]),
             other => panic!("expected Claude, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn claude_app_subcommand_parses() {
+        let cli = Cli::try_parse_from(["open-interceptor", "claude-app"]).unwrap();
+        assert!(matches!(cli.command, Command::ClaudeApp));
     }
 }

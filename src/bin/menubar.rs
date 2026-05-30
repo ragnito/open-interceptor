@@ -31,12 +31,8 @@ fn main() {
     let event_loop = EventLoop::new();
 
     // Load icons (embedded at compile time — paths relative to CARGO_MANIFEST_DIR).
-    let icon_idle = load_icon(include_bytes!(
-        "../../assets/menubar-template.png"
-    ));
-    let icon_active = load_icon(include_bytes!(
-        "../../assets/menubar-active.png"
-    ));
+    let icon_idle = load_icon(include_bytes!("../../assets/menubar-template.png"));
+    let icon_active = load_icon(include_bytes!("../../assets/menubar-active.png"));
 
     // Build menu.
     let menu = Menu::new();
@@ -91,7 +87,8 @@ fn main() {
         *control_flow = ControlFlow::WaitUntil(next_poll);
 
         match event {
-            Event::NewEvents(StartCause::ResumeTimeReached { .. }) | Event::NewEvents(StartCause::Init) => {
+            Event::NewEvents(StartCause::ResumeTimeReached { .. })
+            | Event::NewEvents(StartCause::Init) => {
                 // Time to probe.
                 let running = daemon::probe();
                 *is_running.lock().unwrap() = running;
@@ -108,7 +105,11 @@ fn main() {
                     item_status.set_text(&label);
                     *last = label;
                     // Swap icon.
-                    let icon = if running { icon_active.clone() } else { icon_idle.clone() };
+                    let icon = if running {
+                        icon_active.clone()
+                    } else {
+                        icon_idle.clone()
+                    };
                     tray.set_icon(Some(icon)).ok();
                 }
 
@@ -129,7 +130,6 @@ fn main() {
 
             if id == &quit_id {
                 *control_flow = ControlFlow::Exit;
-
             } else if id == &start_id {
                 let running = *is_running_evt.lock().unwrap();
                 if running {
@@ -152,7 +152,6 @@ fn main() {
                 // Next poll will refresh the label.
                 next_poll = Instant::now() + Duration::from_secs(2);
                 *control_flow = ControlFlow::WaitUntil(next_poll);
-
             } else if id == &stop_id {
                 item_status.set_text("Stopping…");
                 std::thread::spawn(|| {
@@ -162,7 +161,6 @@ fn main() {
                 });
                 next_poll = Instant::now() + Duration::from_secs(2);
                 *control_flow = ControlFlow::WaitUntil(next_poll);
-
             } else if id == &logs_id {
                 let log_dir = home_dir()
                     .join("Library")
@@ -185,15 +183,12 @@ fn main() {
                         *last_label.lock().unwrap() = String::new(); // reset so next poll refreshes it
                     }
                 }
-
             } else if id == &config_id {
                 let cfg = home_dir()
                     .join(".config")
                     .join("open-interceptor")
                     .join("config.yaml");
-                let _ = std::process::Command::new("open")
-                    .arg(&cfg)
-                    .spawn();
+                let _ = std::process::Command::new("open").arg(&cfg).spawn();
             }
 
             // Suppress unused-variable warnings for label tracking.

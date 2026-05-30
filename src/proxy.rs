@@ -9,6 +9,7 @@
 //! (`/v1/messages` and `/v1/messages/count_tokens`). The actual dispatch
 //! to upstream lives in `crate::providers` and is wired in T1.7+.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use axum::{
@@ -23,9 +24,9 @@ use serde_json::json;
 use tokio::net::TcpListener;
 
 use crate::domain::config::ProviderType;
-use crate::services::{health, models};
 use crate::providers;
 use crate::router::Router;
+use crate::services::{health, key_pool::KeyPool, models};
 
 /// Shared application state, passed to every handler via Axum's `State`.
 #[derive(Clone)]
@@ -33,6 +34,7 @@ struct AppState {
     router: Arc<Router>,
     models: Arc<models::ModelsState>,
     health: Arc<health::HealthState>,
+    key_pools: Arc<HashMap<String, Arc<KeyPool>>>,
 }
 
 /// Bind the listener and run the HTTP server until cancelled.
@@ -40,10 +42,22 @@ pub async fn serve(router: Arc<Router>) -> anyhow::Result<()> {
     let port = router.port();
     let addr = format!("127.0.0.1:{port}");
 
+    let mut key_pools_map: HashMap<String, Arc<KeyPool>> = HashMap::new();
+    for (name, provider) in router.providers() {
+        let keys = provider.all_keys();
+        if !keys.is_empty() {
+            key_pools_map.insert(
+                name.to_string(),
+                Arc::new(KeyPool::new(keys, provider.effective_strategy())),
+            );
+        }
+    }
+
     let state = AppState {
         health: Arc::new(health::HealthState::new(router.clone())),
         models: Arc::new(models::ModelsState::new(router.clone())),
         router: router.clone(),
+        key_pools: Arc::new(key_pools_map),
     };
 
     let app = axum::Router::new()
@@ -77,7 +91,7 @@ async fn handle_messages(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    dispatch(state.router, method, uri, headers, body).await
+    dispatch(state, method, uri, headers, body).await
 }
 
 async fn handle_count_tokens(
@@ -87,7 +101,7 @@ async fn handle_count_tokens(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    dispatch(state.router, method, uri, headers, body).await
+    dispatch(state, method, uri, headers, body).await
 }
 
 async fn handle_models(State(state): State<AppState>) -> Response {
@@ -102,7 +116,7 @@ async fn handle_healthz(State(state): State<AppState>) -> Response {
 
 /// Shared dispatch logic between `/v1/messages` and `/v1/messages/count_tokens`.
 async fn dispatch(
-    router: Arc<Router>,
+    state: AppState,
     method: Method,
     uri: Uri,
     headers: HeaderMap,
@@ -111,8 +125,6 @@ async fn dispatch(
     let start = std::time::Instant::now();
     let endpoint = uri.path().to_string();
 
-    // Parse just enough of the body to get the model id. The full body
-    // continues opaque so we can forward it byte-for-byte upstream.
     let model = match extract_model(&body) {
         Ok(m) => m,
         Err(e) => {
@@ -125,7 +137,7 @@ async fn dispatch(
         }
     };
 
-    let resolution = match router.resolve(&model) {
+    let resolution = match state.router.resolve(&model) {
         Some(r) => r,
         None => {
             tracing::warn!(model = %model, endpoint = %endpoint, "no route matches");
@@ -143,74 +155,123 @@ async fn dispatch(
     let effective_model = resolution.effective_model.clone();
     let body_bytes = body.len();
 
-    // Dispatch to the right provider. Each provider has its own error
-    // type, so we normalize to a uniform Response here.
-    let response = match provider_type {
-        ProviderType::AnthropicCompatible => {
-            match providers::anthropic::forward(
-                resolution.provider,
-                &model,
-                &effective_model,
-                method.clone(),
-                uri.clone(),
-                headers,
-                body,
-            )
-            .await
-            {
-                Ok(r) => Ok(r),
-                Err(e) => Err(map_anthropic_error(&provider_name, e)),
-            }
-        }
-        ProviderType::OpenaiCompatible => {
-            match providers::openai::forward(resolution.provider, &model, &effective_model, body)
-                .await
-            {
-                Ok(r) => Ok(r),
-                Err(e) => Err(map_openai_error(&provider_name, e)),
-            }
-        }
-        ProviderType::Passthrough => {
-            return anthropic_error(
-                StatusCode::NOT_IMPLEMENTED,
-                "not_implemented",
-                "passthrough provider type not implemented yet",
-            );
-        }
+    let key_pool = if !passthrough_auth {
+        state.key_pools.get(&provider_name).cloned()
+    } else {
+        None
     };
 
-    let elapsed_ms = start.elapsed().as_millis() as u64;
+    let max_retries = key_pool.as_ref().map(|p| p.len()).unwrap_or(1);
+    let mut last_error_response: Option<Response> = None;
 
-    match response {
-        Ok(response) => {
-            tracing::info!(
-                method = %method,
-                path = %endpoint,
-                model = %model,
-                effective_model = %effective_model,
-                provider = %provider_name,
-                provider_type = ?provider_type,
-                passthrough_auth,
-                body_bytes,
-                upstream_status = response.status().as_u16(),
-                elapsed_ms,
-                "dispatch ok",
-            );
-            response
-        }
-        Err(error_response) => {
-            tracing::error!(
-                method = %method,
-                path = %endpoint,
-                model = %model,
-                provider = %provider_name,
-                upstream_status = error_response.status().as_u16(),
-                elapsed_ms,
-                "dispatch failed",
-            );
-            error_response
+    for attempt in 0..max_retries {
+        let api_key: Option<String> = if let Some(ref pool) = key_pool {
+            pool.acquire().await
+        } else {
+            None
+        };
+
+        let response = match provider_type {
+            ProviderType::AnthropicCompatible => {
+                match providers::anthropic::forward(
+                    resolution.provider,
+                    api_key.as_deref(),
+                    &model,
+                    &effective_model,
+                    method.clone(),
+                    uri.clone(),
+                    headers.clone(),
+                    body.clone(),
+                )
+                .await
+                {
+                    Ok(r) => Ok(r),
+                    Err(e) => Err(map_anthropic_error(&provider_name, e)),
+                }
+            }
+            ProviderType::OpenaiCompatible => {
+                match providers::openai::forward(
+                    resolution.provider,
+                    api_key.as_deref(),
+                    &model,
+                    &effective_model,
+                    body.clone(),
+                )
+                .await
+                {
+                    Ok(r) => Ok(r),
+                    Err(e) => Err(map_openai_error(&provider_name, e)),
+                }
+            }
+            ProviderType::Passthrough => {
+                return anthropic_error(
+                    StatusCode::NOT_IMPLEMENTED,
+                    "not_implemented",
+                    "passthrough provider type not implemented yet",
+                );
+            }
+        };
+
+        let elapsed_ms = start.elapsed().as_millis() as u64;
+
+        match response {
+            Ok(response) => {
+                tracing::info!(
+                    method = %method,
+                    path = %endpoint,
+                    model = %model,
+                    effective_model = %effective_model,
+                    provider = %provider_name,
+                    provider_type = ?provider_type,
+                    passthrough_auth,
+                    body_bytes,
+                    upstream_status = response.status().as_u16(),
+                    elapsed_ms,
+                    attempt,
+                    "dispatch ok",
+                );
+                return response;
+            }
+            Err(error_response) => {
+                let is_rate_limited = error_response.status() == StatusCode::TOO_MANY_REQUESTS;
+                if is_rate_limited && key_pool.is_some() && attempt + 1 < max_retries {
+                    if let Some(ref key) = api_key
+                        && let Some(ref pool) = key_pool
+                    {
+                        pool.mark_exhausted(key).await;
+                    }
+                    tracing::warn!(
+                        model = %model,
+                        provider = %provider_name,
+                        attempt,
+                        max_retries,
+                        "rate-limited, trying next key"
+                    );
+                    last_error_response = Some(error_response);
+                    continue;
+                }
+                tracing::error!(
+                    method = %method,
+                    path = %endpoint,
+                    model = %model,
+                    provider = %provider_name,
+                    upstream_status = error_response.status().as_u16(),
+                    elapsed_ms,
+                    attempt,
+                    "dispatch failed",
+                );
+                return error_response;
+            }
         }
     }
+
+    last_error_response.unwrap_or_else(|| {
+        anthropic_error(
+            StatusCode::TOO_MANY_REQUESTS,
+            "rate_limit_error",
+            "all API keys exhausted, retry in 5 minutes",
+        )
+    })
 }
 
 /// Pull only the `model` field from a JSON body. Tolerant of extra fields
@@ -246,6 +307,11 @@ fn anthropic_error(status: StatusCode, kind: &str, message: &str) -> Response {
 fn map_anthropic_error(provider_name: &str, err: providers::anthropic::ForwardError) -> Response {
     use providers::anthropic::ForwardError as E;
     match err {
+        E::RateLimited => anthropic_error(
+            StatusCode::TOO_MANY_REQUESTS,
+            "rate_limit_error",
+            &format!("`{provider_name}` rate limited"),
+        ),
         E::Upstream(e) => {
             // Distinguish transport failures: timeout → 504, everything else → 502.
             let (status, kind) = if e.is_timeout() {
@@ -253,7 +319,11 @@ fn map_anthropic_error(provider_name: &str, err: providers::anthropic::ForwardEr
             } else {
                 (StatusCode::BAD_GATEWAY, "api_error")
             };
-            anthropic_error(status, kind, &format!("upstream `{provider_name}` failed: {e}"))
+            anthropic_error(
+                status,
+                kind,
+                &format!("upstream `{provider_name}` failed: {e}"),
+            )
         }
         E::MissingApiKey => anthropic_error(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -269,12 +339,14 @@ fn map_anthropic_error(provider_name: &str, err: providers::anthropic::ForwardEr
 }
 
 /// Translate a `providers::openai::ForwardError` similarly.
-fn map_openai_error(
-    provider_name: &str,
-    err: providers::openai::ForwardError,
-) -> Response {
+fn map_openai_error(provider_name: &str, err: providers::openai::ForwardError) -> Response {
     use providers::openai::ForwardError as E;
     match err {
+        E::RateLimited => anthropic_error(
+            StatusCode::TOO_MANY_REQUESTS,
+            "rate_limit_error",
+            &format!("`{provider_name}` rate limited"),
+        ),
         E::MissingApiKey => anthropic_error(
             StatusCode::INTERNAL_SERVER_ERROR,
             "config_error",
@@ -290,7 +362,10 @@ fn map_openai_error(
             anthropic_error(
                 StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY),
                 "api_error",
-                &format!("upstream `{provider_name}` returned {status}: {}", &body.chars().take(300).collect::<String>()),
+                &format!(
+                    "upstream `{provider_name}` returned {status}: {}",
+                    &body.chars().take(300).collect::<String>()
+                ),
             )
         }
         E::Upstream(e) => {
@@ -299,17 +374,30 @@ fn map_openai_error(
             } else {
                 (StatusCode::BAD_GATEWAY, "api_error")
             };
-            anthropic_error(status, kind, &format!("upstream `{provider_name}` transport error: {e}"))
+            anthropic_error(
+                status,
+                kind,
+                &format!("upstream `{provider_name}` transport error: {e}"),
+            )
         }
+        E::RequestSerialize(e) => anthropic_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "api_error",
+            &format!(
+                "failed to serialize translated request for `{provider_name}`: {e}"
+            ),
+        ),
+        E::ResponseSerialize(e) => anthropic_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "api_error",
+            &format!(
+                "failed to serialize translated response from `{provider_name}`: {e}"
+            ),
+        ),
         E::RequestParse(e) => anthropic_error(
             StatusCode::BAD_REQUEST,
             "invalid_request_error",
             &format!("could not parse request body as Anthropic Messages: {e}"),
-        ),
-        other => anthropic_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "api_error",
-            &format!("translating to `{provider_name}` failed: {other}"),
         ),
     }
 }

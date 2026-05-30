@@ -50,10 +50,10 @@ impl HealthState {
 pub async fn handle_healthz(State(state): State<Arc<HealthState>>) -> Response {
     {
         let guard = state.cache.read().await;
-        if let Some((ts, ref result)) = *guard {
-            if ts.elapsed() < CACHE_TTL {
-                return cached_response(result);
-            }
+        if let Some((ts, ref result)) = *guard
+            && ts.elapsed() < CACHE_TTL
+        {
+            return cached_response(result);
         }
     }
 
@@ -120,14 +120,14 @@ async fn probe_provider(client: &Client, provider: &Provider) -> ProviderHealth 
 
     match provider.provider_type {
         ProviderType::AnthropicCompatible => {
-            if let Some(key) = &provider.api_key {
+            if let Some(key) = provider.all_keys().first() {
                 req = req
                     .header("x-api-key", key)
                     .header("anthropic-version", "2023-06-01");
             }
         }
         ProviderType::OpenaiCompatible => {
-            if let Some(key) = &provider.api_key {
+            if let Some(key) = provider.all_keys().first() {
                 req = req.header("Authorization", format!("Bearer {key}"));
             }
         }

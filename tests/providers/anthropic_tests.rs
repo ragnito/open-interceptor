@@ -68,7 +68,7 @@ fn passthrough_keeps_client_auth_header() {
         models: vec![],
     };
 
-    let out = build_upstream_headers(&headers, &provider).unwrap();
+    let out = build_upstream_headers(&headers, &provider, None).unwrap();
     assert_eq!(
         out.get("authorization").unwrap().to_str().unwrap(),
         "Bearer sk-ant-oat01-EXAMPLE"
@@ -97,7 +97,7 @@ fn non_passthrough_substitutes_x_api_key_and_drops_client_auth() {
         models: vec![],
     };
 
-    let out = build_upstream_headers(&headers, &provider).unwrap();
+    let out = build_upstream_headers(&headers, &provider, Some("sk-deepseek-xyz")).unwrap();
     assert_eq!(
         out.get("x-api-key").unwrap().to_str().unwrap(),
         "sk-deepseek-xyz"
@@ -120,7 +120,7 @@ fn missing_api_key_when_required_errors() {
         passthrough_auth: false,
         models: vec![],
     };
-    let err = build_upstream_headers(&HeaderMap::new(), &provider).unwrap_err();
+    let err = build_upstream_headers(&HeaderMap::new(), &provider, None).unwrap_err();
     assert!(matches!(err, ForwardError::MissingApiKey));
 }
 
@@ -142,7 +142,7 @@ fn hop_by_hop_headers_are_dropped() {
         models: vec![],
     };
 
-    let out = build_upstream_headers(&headers, &provider).unwrap();
+    let out = build_upstream_headers(&headers, &provider, None).unwrap();
     assert!(out.get("connection").is_none());
     assert!(out.get("keep-alive").is_none());
     assert!(out.get("transfer-encoding").is_none());
@@ -166,7 +166,7 @@ fn proxy_disclosing_headers_are_not_added() {
         passthrough_auth: false,
         models: vec![],
     };
-    let out = build_upstream_headers(&HeaderMap::new(), &provider).unwrap();
+    let out = build_upstream_headers(&HeaderMap::new(), &provider, Some("k")).unwrap();
     for tell in [
         "via",
         "x-forwarded-for",

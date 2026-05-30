@@ -116,10 +116,7 @@ pub async fn handle_models(
                     });
                 }
             }
-        } else if matches!(
-            provider.provider_type,
-            ProviderType::AnthropicCompatible
-        ) {
+        } else if matches!(provider.provider_type, ProviderType::AnthropicCompatible) {
             // Try dynamic fetch against the provider's own /v1/models.
             let specs = state.fetch_or_cache(provider_key, &provider.url).await;
             for spec in specs {
@@ -239,11 +236,14 @@ async fn fetch_provider_models(base_url: &str) -> Vec<crate::domain::config::Mod
                     .as_u64()
                     .or_else(|| entry["max_output_tokens"].as_u64())
                     .map(|v| v as u32);
-                Some(crate::domain::config::ModelSpec { id, context_window, max_output_tokens })
+                Some(crate::domain::config::ModelSpec {
+                    id,
+                    context_window,
+                    max_output_tokens,
+                })
             })
             .collect()
     } else {
         vec![]
     }
 }
-

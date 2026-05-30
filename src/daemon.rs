@@ -37,7 +37,9 @@ fn dirs_home() -> PathBuf {
 /// Path to the config file the daemon should use.
 fn daemon_config_path() -> PathBuf {
     let home = dirs_home();
-    home.join(".config").join("open-interceptor").join("config.yaml")
+    home.join(".config")
+        .join("open-interceptor")
+        .join("config.yaml")
 }
 
 /// Path to the log directory (macOS standard: ~/Library/Logs/).

@@ -61,7 +61,8 @@ impl ConfigService {
     /// Serialize a `Config` to YAML and write it to disk.
     #[allow(dead_code)]
     pub fn save(config: &Config, path: &Path) -> Result<(), ConfigError> {
-        let yaml = serde_yml::to_string(config).map_err(|e| ConfigError::EnvExpansion(format!("serialization failed: {e}")))?;
+        let yaml = serde_yml::to_string(config)
+            .map_err(|e| ConfigError::EnvExpansion(format!("serialization failed: {e}")))?;
         let dir = path.parent().expect("config path must have a parent");
         std::fs::create_dir_all(dir).map_err(|source| ConfigError::Io {
             path: dir.to_path_buf(),
@@ -110,4 +111,3 @@ fn expand_env_in_strings(value: &mut serde_yml::Value) -> Result<(), ConfigError
     }
     Ok(())
 }
-

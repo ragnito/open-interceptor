@@ -188,7 +188,9 @@ impl State {
             if let Some(Current::Thinking { index }) = self.current {
                 out.push(a::SseEvent::ContentBlockDelta {
                     index,
-                    delta: a::ContentBlockDelta::ThinkingDelta { thinking: reasoning },
+                    delta: a::ContentBlockDelta::ThinkingDelta {
+                        thinking: reasoning,
+                    },
                 });
             }
         }
@@ -674,9 +676,18 @@ mod tests {
                 ]
             }),
         );
-        assert!(matches!(e2[0], a::SseEvent::ContentBlockStart { index: 0, content_block: a::ContentBlockStart::Thinking { .. } }));
+        assert!(matches!(
+            e2[0],
+            a::SseEvent::ContentBlockStart {
+                index: 0,
+                content_block: a::ContentBlockStart::Thinking { .. }
+            }
+        ));
         match &e2[1] {
-            a::SseEvent::ContentBlockDelta { index: 0, delta: a::ContentBlockDelta::ThinkingDelta { thinking } } => {
+            a::SseEvent::ContentBlockDelta {
+                index: 0,
+                delta: a::ContentBlockDelta::ThinkingDelta { thinking },
+            } => {
                 assert_eq!(thinking, "let me think");
             }
             other => panic!("expected ThinkingDelta, got {other:?}"),
@@ -692,9 +703,18 @@ mod tests {
             }),
         );
         assert!(matches!(e3[0], a::SseEvent::ContentBlockStop { index: 0 }));
-        assert!(matches!(e3[1], a::SseEvent::ContentBlockStart { index: 1, content_block: a::ContentBlockStart::Text { .. } }));
+        assert!(matches!(
+            e3[1],
+            a::SseEvent::ContentBlockStart {
+                index: 1,
+                content_block: a::ContentBlockStart::Text { .. }
+            }
+        ));
         match &e3[2] {
-            a::SseEvent::ContentBlockDelta { index: 1, delta: a::ContentBlockDelta::TextDelta { text } } => {
+            a::SseEvent::ContentBlockDelta {
+                index: 1,
+                delta: a::ContentBlockDelta::TextDelta { text },
+            } => {
                 assert_eq!(text, "answer");
             }
             other => panic!("expected TextDelta, got {other:?}"),

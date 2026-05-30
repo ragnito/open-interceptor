@@ -39,13 +39,29 @@ fn http_client() -> &'static Client {
 
 pub async fn forward(
     provider: &Provider,
+    api_key: Option<&str>,
     _request_model: &str,
     effective_model: &str,
     body: Bytes,
 ) -> Result<Response, ForwardError> {
+    // 0. Normalize any role:"system" messages inside the messages array
+    //    to the top-level system field. Some clients (newer Claude Code
+    //    versions, etc.) place the system prompt as a message entry
+    //    instead of using the canonical top-level field.
+    let body = normalize_system_messages(&body);
+
     // 1. Parse Anthropic request.
-    let mut a_req: types_anthropic::MessagesRequest =
-        serde_json::from_slice(&body).map_err(ForwardError::RequestParse)?;
+    let mut a_req: types_anthropic::MessagesRequest = match serde_json::from_slice(&body) {
+        Ok(req) => req,
+        Err(e) => {
+            tracing::warn!(
+                parse_error = %e,
+                body_preview = %String::from_utf8_lossy(&body).chars().take(500).collect::<String>(),
+                "failed to parse request body as Anthropic MessagesRequest",
+            );
+            return Err(ForwardError::RequestParse(e));
+        }
+    };
 
     // 2. Route-level remap.
     if a_req.model != effective_model {
@@ -62,14 +78,11 @@ pub async fn forward(
 
     // 4. POST upstream.
     let upstream_url = build_upstream_url(&provider.url);
-    let api_key = provider
-        .api_key
-        .as_deref()
-        .ok_or(ForwardError::MissingApiKey)?;
+    let key = api_key.ok_or(ForwardError::MissingApiKey)?;
 
     let upstream_resp = http_client()
         .post(&upstream_url)
-        .bearer_auth(api_key)
+        .bearer_auth(key)
         .header("content-type", "application/json")
         // Match the Accept the client implicitly wants; some upstreams
         // require it to actually emit text/event-stream.
@@ -94,6 +107,12 @@ pub async fn forward(
             .await
             .map_err(ForwardError::Upstream)?;
         let body_text = String::from_utf8_lossy(&body).into_owned();
+
+        if status.as_u16() == 429
+            || (status.as_u16() == 403 && body_text.to_lowercase().contains("quota"))
+        {
+            return Err(ForwardError::RateLimited);
+        }
 
         // Diagnostic dump: the last 3 messages we sent upstream so we can
         // see whether the assistant turn included reasoning_content,
@@ -149,6 +168,82 @@ pub async fn forward(
             .header("content-type", "application/json")
             .body(Body::from(out_body))
             .expect("valid response"))
+    }
+}
+
+/// Pre-process the request body to handle `role: "system"` messages that
+/// some clients place inside `messages[]` instead of the top-level `system`
+/// field. Anthropic's Messages API specifies the system prompt in a
+/// top-level field, but some clients emit it as a message entry.
+fn normalize_system_messages(body: &Bytes) -> Bytes {
+    let mut value: serde_json::Value = match serde_json::from_slice(body) {
+        Ok(v) => v,
+        Err(_) => return body.clone(),
+    };
+
+    let messages = match value.get_mut("messages").and_then(|m| m.as_array_mut()) {
+        Some(arr) => arr,
+        None => return body.clone(),
+    };
+
+    let mut system_texts: Vec<String> = Vec::new();
+    let mut i = messages.len();
+    while i > 0 {
+        i -= 1;
+        if let Some(role) = messages[i].get("role").and_then(|r| r.as_str())
+            && role == "system"
+        {
+            if let Some(text) = extract_system_content(&messages[i]) {
+                system_texts.push(text);
+            }
+            messages.remove(i);
+        }
+    }
+
+    if system_texts.is_empty() {
+        return body.clone();
+    }
+
+    system_texts.reverse();
+    let combined = system_texts.join("\n");
+
+    let final_text = match value.get("system") {
+        Some(serde_json::Value::String(s)) => format!("{s}\n\n{combined}"),
+        Some(_) => combined.clone(),
+        None => combined,
+    };
+
+    value["system"] = serde_json::Value::String(final_text);
+
+    tracing::debug!(found_system_messages = system_texts.len(), "normalized role:system messages to top-level system field");
+
+    Bytes::from(serde_json::to_vec(&value).unwrap_or_else(|_| body.to_vec()))
+}
+
+/// Extract the text content from a system message, handling both string
+/// and array-of-blocks shapes.
+fn extract_system_content(msg: &serde_json::Value) -> Option<String> {
+    match msg.get("content")? {
+        serde_json::Value::String(s) => Some(s.clone()),
+        serde_json::Value::Array(arr) => {
+            let texts: Vec<String> = arr
+                .iter()
+                .filter_map(|block| {
+                    let t = block.get("type")?.as_str()?;
+                    if t == "text" {
+                        Some(block.get("text")?.as_str()?.to_string())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            if texts.is_empty() {
+                None
+            } else {
+                Some(texts.join("\n"))
+            }
+        }
+        _ => None,
     }
 }
 
@@ -228,4 +323,7 @@ pub enum ForwardError {
 
     #[error("provider needs an api_key configured")]
     MissingApiKey,
+
+    #[error("upstream returned 429 rate limit or quota exceeded")]
+    RateLimited,
 }

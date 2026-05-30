@@ -56,6 +56,11 @@ providers:
   # MiMo, Qwen) live behind /v1/chat/completions and need the Phase-3
   # translation layer. Hence two provider entries sharing the same
   # subscription key.
+  #
+  # Multiple API keys can be configured via api_keys: for round-robin
+  # rotation and automatic failover on rate-limit (HTTP 429). Keys
+  # marked as exhausted auto-reset after 5 minutes.
+  # key_strategy: round_robin (default) | failover
 
   opencode-go-anthropic:
     type: anthropic_compatible
@@ -71,6 +76,13 @@ providers:
     type: openai_compatible
     url: https://opencode.ai/zen/go/v1
     api_key: ${OPENCODE_GO_API_KEY}
+    # To use multiple subscriptions with automatic failover, replace
+    # api_key above with:
+    #   api_keys:
+    #     - ${OPENCODE_GO_KEY_1}
+    #     - ${OPENCODE_GO_KEY_2}
+    #     - ${OPENCODE_GO_KEY_3}
+    #   key_strategy: round_robin  # or failover
     models:
       - id: glm-5.1
         context_window: 128000

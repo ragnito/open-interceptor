@@ -41,6 +41,19 @@ pub struct Provider {
     #[serde(default)]
     pub api_key: Option<String>,
 
+    /// Multiple API keys for round-robin rotation and automatic failover.
+    /// When set alongside `api_key`, both are merged (deduplicated order
+    /// preserved). When neither is set, the provider must use
+    /// `passthrough_auth` or every request will fail with MissingApiKey.
+    #[serde(default)]
+    pub api_keys: Option<Vec<String>>,
+
+    /// Key rotation strategy. `round_robin` rotates on every request;
+    /// `failover` pins to the first key and only switches on rate-limit
+    /// (HTTP 429 or quota-exhausted response).
+    #[serde(default)]
+    pub key_strategy: Option<KeyStrategy>,
+
     /// When true, the proxy forwards the client's auth header unchanged
     /// to upstream — used to keep a Pro/Max subscription session alive
     /// instead of substituting with `api_key`.
@@ -52,6 +65,27 @@ pub struct Provider {
     /// the provider's own `/v1/models` and cache the result (dynamic fetch).
     #[serde(default)]
     pub models: Vec<ModelSpec>,
+}
+
+impl Provider {
+    pub fn all_keys(&self) -> Vec<String> {
+        let mut keys: Vec<String> = Vec::new();
+        if let Some(ref k) = self.api_key {
+            keys.push(k.clone());
+        }
+        if let Some(ref ks) = self.api_keys {
+            for k in ks {
+                if !keys.contains(k) {
+                    keys.push(k.clone());
+                }
+            }
+        }
+        keys
+    }
+
+    pub fn effective_strategy(&self) -> KeyStrategy {
+        self.key_strategy.unwrap_or_default()
+    }
 }
 
 /// Per-model metadata declared in `config.yaml` under a provider's `models:` list.
@@ -72,6 +106,14 @@ pub enum ProviderType {
     AnthropicCompatible,
     OpenaiCompatible,
     Passthrough,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum KeyStrategy {
+    #[default]
+    RoundRobin,
+    Failover,
 }
 
 /// Route: matches incoming model requests to providers.
@@ -129,4 +171,3 @@ pub enum ConfigValidationError {
     #[error("route #{route_index} has an empty `models` list")]
     EmptyRoutePatterns { route_index: usize },
 }
-
