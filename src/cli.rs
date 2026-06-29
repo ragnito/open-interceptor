@@ -30,18 +30,20 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
-    /// Run the proxy in the foreground. This is what launchd executes in
-    /// production; for local development just invoke it directly.
+    /// Run the proxy in the foreground. This is what the service manager
+    /// (launchd/systemd) executes in production; for local development just
+    /// invoke it directly.
     Run {
         /// Path to the YAML config. `~` is expanded.
         #[arg(short, long, default_value = "~/.config/open-interceptor/config.yaml")]
         config: PathBuf,
     },
 
-    /// Register and start the proxy as a launchd background agent.
-    /// Use --install on first run to create the plist.
+    /// Register and start the proxy as a background service
+    /// (launchd on macOS, systemd user service on Linux).
+    /// Use --install on first run to create the service definition.
     Start {
-        /// Install the launchd plist before starting.
+        /// Install the service definition (plist/unit) before starting.
         #[arg(long)]
         install: bool,
 
@@ -51,7 +53,7 @@ pub enum Command {
         binary: Option<String>,
     },
 
-    /// Stop the launchd background agent.
+    /// Stop the background service.
     Stop,
 
     /// Show whether the daemon is running and on which port.
@@ -108,9 +110,9 @@ pub async fn dispatch(cmd: Command) -> anyhow::Result<()> {
 fn do_start(install_first: bool, binary_path: Option<String>) -> anyhow::Result<()> {
     if install_first {
         let bin = binary_path.unwrap_or_else(|| {
-            // When install flag is given without an explicit binary path,
-            // assume `open-interceptor` is on PATH.
-            "open-interceptor".to_string()
+            std::env::current_exe()
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_else(|_| "open-interceptor".to_string())
         });
         daemon::install(&bin)?;
     }
@@ -118,43 +120,61 @@ fn do_start(install_first: bool, binary_path: Option<String>) -> anyhow::Result<
 }
 
 fn do_logs(follow: bool) -> anyhow::Result<()> {
-    let log_dir = dirs_home()
-        .join("Library")
-        .join("Logs")
-        .join("open-interceptor");
+    let log_dir = daemon::log_dir();
     if !log_dir.exists() {
         anyhow::bail!("log directory not found: {}", log_dir.display());
     }
 
-    let stderr_log = log_dir.join("stderr.log");
+    // The daemon sends stdout/stderr to /dev/null (macOS) or the journal
+    // (Linux); the structured logs live in the tracing rolling files named
+    // `open-interceptor.YYYY-MM-DD.log`. Open the most recent one.
+    let log_file = match latest_log_file(&log_dir) {
+        Some(f) => f,
+        None => {
+            println!("(no logs yet)");
+            return Ok(());
+        }
+    };
 
     if follow {
-        // tail -f on the log file
+        // tail -f on the most recent log file
         let mut child = std::process::Command::new("tail")
-            .args(["-f", stderr_log.to_str().unwrap()])
+            .args(["-f", log_file.to_str().unwrap()])
             .spawn()
             .context("spawning tail")?;
         child.wait().context("waiting for tail")?;
     } else {
         // Print the last ~20 lines
-        if stderr_log.exists() {
-            let content = std::fs::read_to_string(&stderr_log).context("reading log")?;
-            let lines: Vec<&str> = content.lines().collect();
-            let start = lines.len().saturating_sub(20);
-            for line in &lines[start..] {
-                println!("{line}");
-            }
-        } else {
-            println!("(no logs yet)");
+        let content = std::fs::read_to_string(&log_file).context("reading log")?;
+        let lines: Vec<&str> = content.lines().collect();
+        let start = lines.len().saturating_sub(20);
+        for line in &lines[start..] {
+            println!("{line}");
         }
     }
     Ok(())
 }
 
-fn dirs_home() -> PathBuf {
-    std::env::var("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("."))
+/// Find the most recently modified `open-interceptor*.log` file in `log_dir`.
+fn latest_log_file(log_dir: &Path) -> Option<PathBuf> {
+    let mut newest: Option<(std::time::SystemTime, PathBuf)> = None;
+    for entry in std::fs::read_dir(log_dir).ok()?.flatten() {
+        if !entry
+            .file_name()
+            .to_string_lossy()
+            .starts_with("open-interceptor")
+        {
+            continue;
+        }
+        let modified = match entry.metadata().and_then(|m| m.modified()) {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        if newest.as_ref().is_none_or(|(t, _)| modified > *t) {
+            newest = Some((modified, entry.path()));
+        }
+    }
+    newest.map(|(_, path)| path)
 }
 
 /// Foreground run: load config, build router, start the Axum server.
@@ -187,13 +207,12 @@ async fn ensure_daemon_running() -> anyhow::Result<()> {
     eprintln!("open-interceptor: proxy not running — starting...");
 
     if !daemon::is_installed() {
-        let exe =
-            std::env::current_exe().context("could not determine current executable path")?;
+        let exe = std::env::current_exe().context("could not determine current executable path")?;
         let exe = exe
             .canonicalize()
             .context("could not canonicalize current executable path")?;
         let exe_str = exe.to_string_lossy();
-        daemon::install(&exe_str).context("failed to install launchd plist")?;
+        daemon::install(&exe_str).context("failed to install daemon service")?;
     }
 
     daemon::start().context("failed to start proxy daemon")?;
@@ -206,8 +225,8 @@ async fn ensure_daemon_running() -> anyhow::Result<()> {
         if std::time::Instant::now() >= deadline {
             anyhow::bail!(
                 "proxy did not start within 15 s.\n\
-                 Check logs:  open-interceptor logs\n\
-                 Plist:       ~/Library/LaunchAgents/com.open-interceptor.plist"
+                 Check logs:    open-interceptor logs\n\
+                 Check status:  open-interceptor status"
             );
         }
         tokio::time::sleep(std::time::Duration::from_millis(250)).await;
@@ -283,6 +302,7 @@ async fn do_claude(args: Vec<String>) -> anyhow::Result<()> {
 /// macOS GUI apps don't inherit shell environment variables. We use
 /// `launchctl setenv` to inject them into the GUI session domain,
 /// launch the app with `open -a`, then clean up.
+#[cfg(target_os = "macos")]
 async fn do_claude_app() -> anyhow::Result<()> {
     ensure_daemon_running().await?;
 
@@ -294,11 +314,7 @@ async fn do_claude_app() -> anyhow::Result<()> {
         .context("failed to run launchctl setenv")?;
 
     std::process::Command::new("launchctl")
-        .args([
-            "setenv",
-            "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY",
-            "1",
-        ])
+        .args(["setenv", "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY", "1"])
         .status()
         .context("failed to run launchctl setenv")?;
 
@@ -323,6 +339,20 @@ async fn do_claude_app() -> anyhow::Result<()> {
         .status();
 
     Ok(())
+}
+
+/// On non-macOS platforms the Claude desktop app integration is unavailable
+/// (it relies on `launchctl setenv` + `open -a`). GUI apps on Linux inherit
+/// the environment differently per desktop; use `open-interceptor claude`
+/// instead, or export `ANTHROPIC_BASE_URL` yourself.
+#[cfg(not(target_os = "macos"))]
+async fn do_claude_app() -> anyhow::Result<()> {
+    anyhow::bail!(
+        "`claude-app` (launch the Claude desktop app) is only supported on macOS.\n\
+         On Linux, run `open-interceptor claude` instead, or set\n\
+         ANTHROPIC_BASE_URL=http://127.0.0.1:{} in your environment.",
+        daemon::PROXY_PORT
+    );
 }
 
 /// Walk `PATH` and return the first executable named `name`.

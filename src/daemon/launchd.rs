@@ -1,90 +1,64 @@
-//! launchd daemon management (Phase 4).
+//! macOS launchd backend.
 //!
-//! Registers `open-interceptor` as a per-user background agent on macOS
-//! via `launchd`. The daemon starts at login and restarts automatically
-//! if it exits, so the proxy is always available without a terminal
-//! session.
-//!
-//! Platform note: this is macOS-only. Linux systemd support can be
-//! added later following the same trait/interface pattern.
+//! Registers `open-interceptor` as a per-user LaunchAgent. The agent starts
+//! at login and restarts automatically if it exits.
 
 use std::path::PathBuf;
 
 use anyhow::Context;
 
-const SERVICE_LABEL: &str = "com.open-interceptor";
+use super::{SERVICE_NAME, config_path, home, log_dir};
+
 const PLIST_FILENAME: &str = "com.open-interceptor.plist";
-pub const PROXY_PORT: u16 = 3300;
 
 /// Path to the launchd plist in the user's Library.
 fn plist_path() -> PathBuf {
-    dirs_plist()
-}
-
-fn dirs_plist() -> PathBuf {
-    let home = dirs_home();
-    home.join("Library")
+    home()
+        .join("Library")
         .join("LaunchAgents")
         .join(PLIST_FILENAME)
 }
 
-fn dirs_home() -> PathBuf {
-    std::env::var("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("."))
+/// The current user's numeric UID, used to address the launchd GUI domain
+/// (`gui/<uid>`). launchd domains are per-user, so a hardcoded UID only works
+/// for one account — we resolve it at runtime via `id -u`.
+fn current_uid() -> anyhow::Result<String> {
+    let output = std::process::Command::new("id")
+        .arg("-u")
+        .output()
+        .context("running `id -u` to resolve the launchd domain")?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "`id -u` failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
-/// Path to the config file the daemon should use.
-fn daemon_config_path() -> PathBuf {
-    let home = dirs_home();
-    home.join(".config")
-        .join("open-interceptor")
-        .join("config.yaml")
-}
-
-/// Path to the log directory (macOS standard: ~/Library/Logs/).
-fn daemon_log_dir() -> PathBuf {
-    let home = dirs_home();
-    home.join("Library").join("Logs").join("open-interceptor")
-}
-
-/// Returns `true` if the proxy is accepting connections on the local port.
-/// Does NOT check launchd — only the TCP socket. Fast (2 s timeout).
-pub fn probe() -> bool {
-    std::net::TcpStream::connect_timeout(
-        &std::net::SocketAddr::from(([127, 0, 0, 1], PROXY_PORT)),
-        std::time::Duration::from_secs(2),
-    )
-    .is_ok()
-}
-
-/// Returns `true` if the launchd plist is installed.
 pub fn is_installed() -> bool {
     plist_path().exists()
 }
 
-/// Generate and write the launchd plist that defines the background
-/// agent. Requires the absolute path to the `open-interceptor` binary
-/// so launchd can invoke it.
 pub fn install(binary_path: &str) -> anyhow::Result<()> {
-    let plist_dir = dirs_home().join("Library").join("LaunchAgents");
+    let plist_dir = home().join("Library").join("LaunchAgents");
     std::fs::create_dir_all(&plist_dir).context("creating LaunchAgents directory")?;
 
-    let config_path = daemon_config_path();
-    if !config_path.exists() {
+    let config = config_path();
+    if !config.exists() {
         anyhow::bail!(
             "config not found at {}. Create it first:\n  cp config.yaml.example {}",
-            config_path.display(),
-            config_path.display()
+            config.display(),
+            config.display()
         );
     }
 
-    let log_dir = daemon_log_dir();
-    std::fs::create_dir_all(&log_dir).context("creating log directory")?;
+    let logs = log_dir();
+    std::fs::create_dir_all(&logs).context("creating log directory")?;
 
-    let stdout_log = log_dir.join("stdout.log");
-    let stderr_log = log_dir.join("stderr.log");
-
+    // stdout/stderr are redirected to /dev/null in the plist — launchd would
+    // otherwise grow unbounded files in ~/Library/Logs. Structured logs go to
+    // the tracing rolling file appender instead.
     let plist = format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -108,27 +82,19 @@ pub fn install(binary_path: &str) -> anyhow::Result<()> {
     <true/>
 
     <key>StandardOutPath</key>
-    <string>{stdout_log}</string>
+    <string>/dev/null</string>
 
     <key>StandardErrorPath</key>
-    <string>{stderr_log}</string>
-
-    <key>EnvironmentVariables</key>
-    <dict>
-        <key>RUST_LOG</key>
-        <string>open_interceptor=info</string>
-    </dict>
+    <string>/dev/null</string>
 
     <key>ProcessType</key>
     <string>Background</string>
 </dict>
 </plist>
 "#,
-        label = SERVICE_LABEL,
+        label = SERVICE_NAME,
         binary = binary_path,
-        config = config_path.display(),
-        stdout_log = stdout_log.display(),
-        stderr_log = stderr_log.display(),
+        config = config.display(),
     );
 
     let path = plist_path();
@@ -137,13 +103,12 @@ pub fn install(binary_path: &str) -> anyhow::Result<()> {
     eprintln!(
         "plist written to {}\nconfig: {}\nlogs: {}",
         path.display(),
-        config_path.display(),
-        log_dir.display()
+        config.display(),
+        logs.display()
     );
     Ok(())
 }
 
-/// Load the launchd agent and start it running.
 pub fn start() -> anyhow::Result<()> {
     let path = plist_path();
     if !path.exists() {
@@ -153,9 +118,10 @@ pub fn start() -> anyhow::Result<()> {
         );
     }
 
-    // bootstrap (macOS 10.10+) is preferred over load
+    let uid = current_uid()?;
+    // bootstrap (macOS 10.10+) is preferred over the legacy `load`.
     let output = std::process::Command::new("launchctl")
-        .args(["bootstrap", "gui/501", path.to_str().unwrap()])
+        .args(["bootstrap", &format!("gui/{uid}"), path.to_str().unwrap()])
         .output()
         .context("running launchctl bootstrap")?;
 
@@ -172,11 +138,10 @@ pub fn start() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Unload and stop the launchd agent.
 pub fn stop() -> anyhow::Result<()> {
-    // bootout first, then remove the plist
+    let uid = current_uid()?;
     let output = std::process::Command::new("launchctl")
-        .args(["bootout", &format!("gui/501/{SERVICE_LABEL}")])
+        .args(["bootout", &format!("gui/{uid}/{SERVICE_NAME}")])
         .output()
         .context("running launchctl bootout")?;
 
@@ -192,7 +157,6 @@ pub fn stop() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Check whether the daemon is running and on which port.
 pub fn status() -> anyhow::Result<()> {
     let path = plist_path();
     if !path.exists() {
@@ -200,9 +164,9 @@ pub fn status() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    // Ask launchctl about our service.
+    let uid = current_uid()?;
     let output = std::process::Command::new("launchctl")
-        .args(["print", &format!("gui/501/{SERVICE_LABEL}")])
+        .args(["print", &format!("gui/{uid}/{SERVICE_NAME}")])
         .output()
         .context("running launchctl print")?;
 
@@ -213,16 +177,17 @@ pub fn status() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    match probe() {
-        true => println!("running: http://127.0.0.1:{PROXY_PORT}"),
-        false => println!("process running but port {PROXY_PORT} not reachable yet"),
+    match super::probe() {
+        true => println!("running: http://127.0.0.1:{}", super::PROXY_PORT),
+        false => println!(
+            "process running but port {} not reachable yet",
+            super::PROXY_PORT
+        ),
     }
 
     Ok(())
 }
 
-/// Remove the plist. The service must be stopped first (no-op if already
-/// stopped).
 #[allow(dead_code)]
 pub fn uninstall() -> anyhow::Result<()> {
     let path = plist_path();
@@ -238,12 +203,6 @@ pub fn uninstall() -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn service_label_is_valid() {
-        assert!(!SERVICE_LABEL.is_empty());
-        assert!(SERVICE_LABEL.contains('.'));
-    }
 
     #[test]
     fn plist_path_in_user_library() {

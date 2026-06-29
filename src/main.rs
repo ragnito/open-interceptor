@@ -5,8 +5,6 @@
 //! workloads benefit from work-stealing when streaming responses concurrent
 //! to other clients).
 
-use std::path::PathBuf;
-
 use clap::Parser;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::layer::SubscriberExt;
@@ -55,11 +53,8 @@ fn init_tracing() -> tracing_appender::non_blocking::WorkerGuard {
         .with_writer(std::io::stderr);
 
     // ---- rolling file layer: daily rotation, retain 7 days -----------
-    // macOS standard location for user-space daemon logs
-    let log_dir = dirs_home()
-        .join("Library")
-        .join("Logs")
-        .join("open-interceptor");
+    // Platform-aware location for user-space daemon logs (see daemon::log_dir).
+    let log_dir = daemon::log_dir();
     let _ = std::fs::create_dir_all(&log_dir);
 
     let file_appender = tracing_appender::rolling::RollingFileAppender::builder()
@@ -72,6 +67,10 @@ fn init_tracing() -> tracing_appender::non_blocking::WorkerGuard {
 
     let (non_blocking_file, guard) = tracing_appender::non_blocking(file_appender);
 
+    // File layer never logs at DEBUG — DEBUG dumps full request bodies and
+    // would fill the disk for long conversations.  DEBUG stays on stderr
+    // (visible to `open-interceptor run`, capped by the terminal buffer).
+    let file_filter = EnvFilter::new("open_interceptor=info");
     let file_layer = tracing_subscriber::fmt::layer()
         .with_target(false)
         .with_level(true)
@@ -81,15 +80,10 @@ fn init_tracing() -> tracing_appender::non_blocking::WorkerGuard {
 
     tracing_subscriber::registry()
         .with(filter)
+        .with(file_filter)
         .with(stderr_layer)
         .with(file_layer)
         .init();
 
     guard
-}
-
-fn dirs_home() -> PathBuf {
-    std::env::var("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("."))
 }
