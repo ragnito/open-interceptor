@@ -90,6 +90,19 @@ PLIST
 echo "==> Ad-hoc signing (for local use)…"
 codesign --force --deep --sign - "$APP_BUNDLE"
 
+# -----------------------------------------------------------------------
+# Install CLI to ~/.local/bin (optional — skipped if the directory doesn't
+# exist). macOS 26+ rejects the raw linker-signed binary produced by cargo;
+# the binary must be re-signed with codesign after being copied.
+# -----------------------------------------------------------------------
+CLI_DEST="$HOME/.local/bin/open-interceptor"
+if [[ -d "$HOME/.local/bin" ]]; then
+    echo "==> Installing CLI → $CLI_DEST"
+    cp "$RELEASE_DIR/open-interceptor" "$CLI_DEST"
+    codesign --force --sign - "$CLI_DEST"
+    echo "    signed ok"
+fi
+
 echo ""
 echo "Done: $APP_BUNDLE"
 echo ""
