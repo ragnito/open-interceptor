@@ -6,20 +6,27 @@ class OpenInterceptor < Formula
 
   on_macos do
     if Hardware::CPU.arm?
-      url "https://github.com/ragnito/open-interceptor/releases/download/v#{version}/open-interceptor-darwin-arm64"
+      url "https://github.com/ragnito/open-interceptor/releases/download/v#{version}/open-interceptor-aarch64-apple-darwin.tar.gz"
       sha256 "REPLACE_WITH_ARM64_SHA256"
     else
-      url "https://github.com/ragnito/open-interceptor/releases/download/v#{version}/open-interceptor-darwin-x64"
+      url "https://github.com/ragnito/open-interceptor/releases/download/v#{version}/open-interceptor-x86_64-apple-darwin.tar.gz"
       sha256 "REPLACE_WITH_X64_SHA256"
     end
   end
 
-  def install
+  on_linux do
     if Hardware::CPU.arm?
-      bin.install "open-interceptor-darwin-arm64" => "open-interceptor"
+      url "https://github.com/ragnito/open-interceptor/releases/download/v#{version}/open-interceptor-aarch64-unknown-linux-musl.tar.gz"
+      sha256 "REPLACE_WITH_LINUX_ARM64_SHA256"
     else
-      bin.install "open-interceptor-darwin-x64" => "open-interceptor"
+      url "https://github.com/ragnito/open-interceptor/releases/download/v#{version}/open-interceptor-x86_64-unknown-linux-musl.tar.gz"
+      sha256 "REPLACE_WITH_LINUX_X64_SHA256"
     end
+  end
+
+  def install
+    # Each release tarball contains a single `open-interceptor` binary.
+    bin.install "open-interceptor"
   end
 
   def caveats

@@ -1,5 +1,22 @@
 name: release
 
+# Build release binaries for macOS and Linux and attach them to the GitHub
+# Release for the pushed tag. The `install.sh` script downloads these assets.
+#
+# Asset naming (consumed by install.sh — keep in sync):
+#   open-interceptor-<target>.tar.gz
+#   open-interceptor-<target>.tar.gz.sha256
+#
+# Targets:
+#   aarch64-apple-darwin        (Apple Silicon macOS)
+#   x86_64-apple-darwin         (Intel macOS)
+#   aarch64-unknown-linux-musl  (ARM64 Linux, static)
+#   x86_64-unknown-linux-musl   (x86_64 Linux, static)
+#
+# musl is used for Linux so the binaries are fully static and run on any
+# distro without a glibc-version dependency. The crate already uses
+# rustls-tls (no OpenSSL), so there is no system TLS dependency to link.
+
 on:
   push:
     tags:
@@ -9,52 +26,33 @@ permissions:
   contents: write
 
 jobs:
-  build:
+  upload-assets:
+    name: ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
         include:
-          - os: macos-latest
-            target: aarch64-apple-darwin
-            artifact: open-interceptor-darwin-arm64
-          - os: macos-13
-            target: x86_64-apple-darwin
-            artifact: open-interceptor-darwin-x64
-
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: x86_64-apple-darwin
+            os: macos-13
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-latest
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      # Builds the `open-interceptor` binary for the target, strips it,
+      # creates `open-interceptor-<target>.tar.gz` + a `.sha256` checksum, and
+      # uploads both to the release matching the pushed tag (creating the
+      # release if it does not yet exist — safe under matrix concurrency).
+      # Cross-compilation toolchains (incl. musl) are handled automatically.
+      - uses: taiki-e/upload-rust-binary-action@v1
         with:
-          targets: ${{ matrix.target }}
-
-      - name: Build (release)
-        run: cargo build --release --target ${{ matrix.target }}
-
-      - name: Rename binary
-        run: |
-          mv target/${{ matrix.target }}/release/open-interceptor ./${{ matrix.artifact }}
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.artifact }}
-          path: ./${{ matrix.artifact }}
-
-  release:
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          pattern: open-interceptor-*
-          merge-multiple: true
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            open-interceptor-darwin-arm64
-            open-interceptor-darwin-x64
-          generate_release_notes: true
+          bin: open-interceptor
+          target: ${{ matrix.target }}
+          archive: open-interceptor-$target
+          checksum: sha256
+          token: ${{ secrets.GITHUB_TOKEN }}

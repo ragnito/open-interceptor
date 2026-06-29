@@ -6,6 +6,21 @@ Set `ANTHROPIC_BASE_URL=http://127.0.0.1:3300` once, then switch providers from 
 
 ## Install
 
+### Quick install (macOS & Linux)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ragnito/open-interceptor/master/install.sh | sh
+```
+
+Downloads the prebuilt binary for your platform (macOS arm64/x86_64, Linux x86_64/aarch64), verifies its checksum, and installs it to `~/.local/bin`. The installer prints the next steps.
+
+Pin a version or change the install dir:
+
+```bash
+OPEN_INTERCEPTOR_VERSION=v0.1.0 OPEN_INTERCEPTOR_BIN_DIR=/usr/local/bin \
+  sh -c "$(curl -fsSL https://raw.githubusercontent.com/ragnito/open-interceptor/master/install.sh)"
+```
+
 ### Homebrew (macOS)
 
 ```bash
@@ -13,24 +28,19 @@ brew tap ragnito/tap
 brew install open-interceptor
 ```
 
-Create your config:
+### After installing
 
 ```bash
+# 1. Create your config
 mkdir -p ~/.config/open-interceptor
 cp config.yaml.example ~/.config/open-interceptor/config.yaml
-# edit ~/.config/open-interceptor/config.yaml with your API keys
-```
+# edit it with your providers / API keys
 
-Start the background daemon:
+# 2. Start the background daemon (launchd on macOS, systemd user service on Linux)
+open-interceptor start --install
+open-interceptor status
 
-```bash
-open-interceptor start --install  # installs launchd plist + starts daemon
-open-interceptor status           # verify it's running
-```
-
-Then add to your `~/.zshrc` (or `~/.bashrc`):
-
-```bash
+# 3. Point Claude Code at the proxy — add to ~/.zshrc / ~/.bashrc
 export ANTHROPIC_BASE_URL=http://127.0.0.1:3300
 export CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1
 ```
@@ -42,15 +52,7 @@ Requires Rust stable (1.85+).
 ```bash
 git clone https://github.com/ragnito/open-interceptor
 cd open-interceptor
-cp config.yaml.example ~/.config/open-interceptor/config.yaml
-# edit ~/.config/open-interceptor/config.yaml with your API keys
 cargo build --release
-./target/release/open-interceptor run --config ~/.config/open-interceptor/config.yaml
-```
-
-Or install the daemon manually:
-
-```bash
 sudo cp target/release/open-interceptor /usr/local/bin/
 open-interceptor start --install --binary /usr/local/bin/open-interceptor
 ```
@@ -65,7 +67,7 @@ open-interceptor claude
 
 That's it. The command:
 1. Checks if the proxy is running on port 3300.
-2. If not, installs the launchd plist (first time only) and starts the daemon automatically.
+2. If not, installs the service definition (first time only) and starts the daemon automatically.
 3. Injects `ANTHROPIC_BASE_URL=http://127.0.0.1:3300` and `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1`.
 4. Replaces the process image with the real `claude` binary — TTY, signals, and exit code are preserved exactly.
 
@@ -77,22 +79,6 @@ open-interceptor claude --debug
 ```
 
 No more exporting env vars manually. Works like `ollama run`.
-
-### Menu-bar app
-
-Build and install the native macOS status-bar app:
-
-```bash
-tools/bundle-app.sh
-# Then drag "Open Interceptor.app" to /Applications
-```
-
-The app:
-- Appears in the **top-right menu bar** with no Dock icon (`LSUIElement`).
-- Shows `● Running` / `○ Stopped` and polls the proxy port every 5 seconds.
-- **Start** / **Stop** toggle the launchd daemon.
-- The proxy keeps running even after you quit the app (launchd-managed).
-- **View Logs** / **Open Config** open the log file and config YAML.
 
 ### Manual (existing workflow)
 
@@ -107,7 +93,7 @@ claude
 ```
 open-interceptor claude [args...]         run claude with proxy auto-started
 open-interceptor run --config <path>      foreground server
-open-interceptor start --install          install + start launchd daemon
+open-interceptor start --install          install + start the background daemon
 open-interceptor start                    start daemon (already installed)
 open-interceptor stop                     stop daemon
 open-interceptor status                   check if daemon is running
@@ -130,7 +116,7 @@ There are already several similar projects ([claude-code-router](https://github.
 Claude Code
   │  ANTHROPIC_BASE_URL=http://127.0.0.1:3300
   ▼
-open-interceptor (localhost:3300, launchd daemon)
+open-interceptor (localhost:3300, background daemon)
   ├─ reads `model` field from request body
   ├─ matches against configured route patterns (glob)
   └─ dispatches to provider:

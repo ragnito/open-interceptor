@@ -72,6 +72,74 @@ cargo clippy --all-targets -- -D warnings
 cargo test
 ```
 
+## Despliegue (daemon multiplataforma)
+
+El daemon funciona igual en **macOS (launchd)** y **Linux (systemd user service)**. El binario es el mismo; la lógica específica de cada gestor de servicios vive en `src/daemon/` con dispatch por plataforma:
+
+- `src/daemon/mod.rs` — API pública (`install`/`start`/`stop`/`status`/`probe`/`is_installed`/`uninstall`), helpers compartidos (`home`, `config_path`, `log_dir`) y dispatch por `cfg(target_os)`.
+- `src/daemon/launchd.rs` — backend macOS (plist en `~/Library/LaunchAgents/`, `launchctl bootstrap/bootout gui/<uid>`).
+- `src/daemon/systemd.rs` — backend Linux (unit en `~/.config/systemd/user/open-interceptor.service`, `systemctl --user enable --now`, `loginctl enable-linger`).
+- `src/daemon/unsupported.rs` — stub para otras plataformas (mantiene `cargo check` verde; `run` sigue funcionando en foreground).
+
+El `log_dir()` también es platform-aware: macOS `~/Library/Logs/open-interceptor`, Linux `$XDG_STATE_HOME/open-interceptor` (o `~/.local/state/open-interceptor`).
+
+### Script de despliegue
+
+```bash
+./tools/deploy.sh            # release build + install + restart (Mac y Linux)
+./tools/deploy.sh --debug     # debug build
+./tools/deploy.sh --binary /path/to/binary  # usar binary ya compilado
+```
+
+### Reiniciar manualmente
+
+```bash
+open-interceptor stop
+open-interceptor start --install   # genera plist (Mac) o unit (Linux) con path absoluto
+open-interceptor start
+```
+
+### Notas sobre el path absoluto
+
+**Ni launchd ni systemd resuelven un nombre suelto del binario.** El plist (`ProgramArguments`) y el unit (`ExecStart`) deben usar el **path absoluto**. En macOS, un nombre sin path falla con `Function not implemented` (PID 78 en `launchctl list`).
+
+El script `deploy.sh` y `open-interceptor start --install` usan `std::env::current_exe()` para obtener el path absoluto al binary en el momento del install. Si luego se mueve el binary sin reinstall, el servicio volverá a fallar.
+
+### Troubleshooting macOS (launchd)
+
+```bash
+launchctl list | grep open-interceptor          # estado del job
+launchctl error <pid>                            # PID sin proceso → zombie
+launchctl kickstart -k gui/$(id -u)/com.open-interceptor
+ls -lah ~/Library/Logs/open-interceptor/         # logs (stdout/stderr van a /dev/null)
+~/.local/bin/open-interceptor run --config ~/.config/open-interceptor/config.yaml  # arranque directo
+```
+
+| Síntoma | Causa | Solución |
+|---------|-------|----------|
+| `Bootstrap failed: 5: Input/output error` | Binary no encontrado por launchd | `open-interceptor start --install` para regenerar plist con path absoluto |
+| `Function not implemented` (PID 78) | Mismo: plist sin path absoluto | Mismo |
+| `Address already in use` | Otra instancia ocupando el puerto | `pkill -f open-interceptor` antes de arrancar |
+| Daemon "running" pero puerto no responde | Zombie launchd entry | `launchctl remove com.open-interceptor` + reinstall |
+
+### Troubleshooting Linux (systemd)
+
+```bash
+systemctl --user status open-interceptor         # estado del servicio
+journalctl --user -u open-interceptor -e          # logs del journal
+systemctl --user restart open-interceptor         # reiniciar
+loginctl enable-linger                            # correr sin sesión activa (al boot)
+ls -lah "${XDG_STATE_HOME:-$HOME/.local/state}/open-interceptor/"  # logs (tracing)
+~/.local/bin/open-interceptor run --config ~/.config/open-interceptor/config.yaml  # arranque directo
+```
+
+| Síntoma | Causa | Solución |
+|---------|-------|----------|
+| `Failed to connect to bus` | No hay sesión de usuario systemd (SSH sin lingering) | `loginctl enable-linger` y reintentar |
+| Servicio no arranca al boot | Falta lingering | `loginctl enable-linger` (lo intenta `start --install`) |
+| `Address already in use` | Otra instancia ocupando el puerto | `pkill -f open-interceptor` antes de arrancar |
+| Unit no aparece tras editar | systemd no recargó | `systemctl --user daemon-reload` (lo hace `start --install`) |
+
 ## Fases del proyecto
 
 Ver `TODO.md`. Estamos siguiendo este orden estricto:
