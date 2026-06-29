@@ -86,3 +86,4 @@ Marca cada tarea al completarla y commitea junto al cambio. El detalle técnico 
 - [~] **T5.3** ~~Retry con backoff exponencial~~ — el harness de Claude Code ya lo maneja
 - [x] **T5.4** `passthrough_auth: true` — validado en Anthropic (el único que importa) ✅
 - [~] **T5.5** Tests de integración con servidor mock (`wiremock-rs`) — backlog
+- [x] **T5.6** Context guard: devuelve 400 `invalid_request_error: prompt is too long` cuando los tokens estimados superan `context_window * threshold`. Opt-in vía `context_guard:` en config. Causa que Claude Code incite/fuerce la compactación.

@@ -22,6 +22,7 @@ use axum::{
 use reqwest::Client;
 
 use crate::domain::config::Provider;
+use crate::providers::truncate_for_log;
 use crate::translate::{
     req_anthropic_to_openai, resp_openai_to_anthropic, sse_stream, types_anthropic, types_openai,
 };
@@ -80,6 +81,17 @@ pub async fn forward(
     let upstream_url = build_upstream_url(&provider.url);
     let key = api_key.ok_or(ForwardError::MissingApiKey)?;
 
+    tracing::debug!(
+        url = %upstream_url,
+        headers = %format!(
+            "authorization: Bearer [REDACTED] | content-type: application/json | accept: {}",
+            if wants_stream { "text/event-stream" } else { "application/json" }
+        ),
+        body_bytes = oai_body.len(),
+        body_preview = %truncate_for_log(&oai_body, 512),
+        "→ upstream OpenAI request",
+    );
+
     let upstream_resp = http_client()
         .post(&upstream_url)
         .bearer_auth(key)
@@ -125,10 +137,10 @@ pub async fn forward(
             tail_shape = %tail,
             "upstream error — dumping recent message shape",
         );
+        let oai_req_serialized = serde_json::to_vec(&oai_req).unwrap_or_default();
         tracing::debug!(
-            upstream_request_body = %String::from_utf8_lossy(
-                &serde_json::to_vec(&oai_req).unwrap_or_default()
-            ),
+            upstream_request_body_bytes = oai_req_serialized.len(),
+            upstream_request_body_preview = %truncate_for_log(&oai_req_serialized, 512),
             "upstream error — full request body",
         );
 
@@ -215,7 +227,10 @@ fn normalize_system_messages(body: &Bytes) -> Bytes {
 
     value["system"] = serde_json::Value::String(final_text);
 
-    tracing::debug!(found_system_messages = system_texts.len(), "normalized role:system messages to top-level system field");
+    tracing::debug!(
+        found_system_messages = system_texts.len(),
+        "normalized role:system messages to top-level system field"
+    );
 
     Bytes::from(serde_json::to_vec(&value).unwrap_or_else(|_| body.to_vec()))
 }

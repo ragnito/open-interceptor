@@ -10,6 +10,20 @@ port: 3300
 # Log level: trace | debug | info | warn | error
 log_level: info
 
+# Context guard (optional) — when present, the proxy estimates input tokens
+# (chars/4 heuristic) and returns a 400 "prompt is too long" error when the
+# request exceeds `threshold` × the model's declared `context_window`.
+# Claude Code interprets this error and prompts the user to run /compact
+# (recent versions may auto-compact).
+#
+# Only applies to models with a static `context_window` declared under
+# `providers.<name>.models`.  Dynamic-fetch models are not affected.
+#
+# Omit this block entirely to disable (default behaviour — no enforcement).
+#
+# context_guard:
+#   threshold: 0.85   # fire at 85% of context_window (default)
+
 # -----------------------------------------------------------------------------
 # Providers
 #
@@ -30,7 +44,8 @@ log_level: info
 # /v1/models endpoint. Each model is an object with:
 #   - id: model ID (required)
 #   - context_window: total context in tokens (optional — surfaced in /v1/models
-#     so Claude Code's /context shows the correct budget for the model)
+#     so Claude Code's /context shows the correct budget for the model; also
+#     used by `context_guard` to enforce a compaction threshold)
 #   - max_output_tokens: max output tokens (optional)
 # If `models:` is omitted entirely, the proxy fetches the provider's own
 # /v1/models and caches the result (only for anthropic_compatible providers).

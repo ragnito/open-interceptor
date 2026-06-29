@@ -21,6 +21,12 @@ pub struct Config {
     pub providers: HashMap<String, Provider>,
 
     pub routes: Vec<Route>,
+
+    /// When set, the proxy enforces a context limit per model and returns a
+    /// 400 "prompt is too long" error before forwarding — which causes Claude
+    /// Code to trigger compaction.  Opt-in: omit or set to `null` to disable.
+    #[serde(default)]
+    pub context_guard: Option<ContextGuard>,
 }
 
 /// Upstream API endpoint configuration.
@@ -130,6 +136,26 @@ pub struct Route {
     /// upstream provider.
     #[serde(default)]
     pub remap: HashMap<String, String>,
+}
+
+/// Context-guard settings. When present, the proxy checks estimated input
+/// tokens against each model's declared `context_window` before forwarding and
+/// returns a 400 "prompt is too long" error when the threshold is exceeded.
+/// This causes Claude Code to prompt the user for compaction (or auto-compact
+/// in recent versions).
+///
+/// Only applies to models with a static `context_window` declared in config.
+/// Dynamic-fetch models are not affected.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct ContextGuard {
+    /// Fraction of `context_window` at which to trigger the guard (0.0–1.0).
+    /// Default: 0.85 (fire at 85% of the declared context window).
+    #[serde(default = "default_guard_threshold")]
+    pub threshold: f32,
+}
+
+fn default_guard_threshold() -> f32 {
+    0.85
 }
 
 fn default_port() -> u16 {

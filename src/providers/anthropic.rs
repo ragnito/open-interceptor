@@ -33,6 +33,7 @@ use axum::{
 use reqwest::Client;
 
 use crate::domain::config::Provider;
+use crate::providers::truncate_for_log;
 
 /// Lazily-initialized shared `reqwest::Client`. Connection pooling and
 /// keep-alive happen here, so creating one per request is wasteful.
@@ -70,6 +71,15 @@ pub async fn forward(
     let upstream_body = sanitize_body(&body, effective_model, request_model)?;
 
     let upstream_headers = build_upstream_headers(&headers, provider, api_key)?;
+
+    tracing::debug!(
+        url = %upstream_url,
+        method = %method,
+        headers = %format_headers_redacted(&upstream_headers),
+        body_bytes = upstream_body.len(),
+        body_preview = %truncate_for_log(&upstream_body, 512),
+        "→ upstream Anthropic request",
+    );
 
     let response = http_client()
         .request(method, &upstream_url)
@@ -242,6 +252,24 @@ fn relay_response(upstream: reqwest::Response) -> Response {
     builder
         .body(body)
         .expect("response builder cannot fail with a valid status + body")
+}
+
+fn format_headers_redacted(headers: &HeaderMap) -> String {
+    headers
+        .iter()
+        .map(|(name, value)| {
+            if is_auth_header(name.as_str()) {
+                format!("{}: [REDACTED]", name.as_str())
+            } else {
+                format!(
+                    "{}: {}",
+                    name.as_str(),
+                    value.to_str().unwrap_or("<binary>")
+                )
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" | ")
 }
 
 #[derive(Debug, thiserror::Error)]

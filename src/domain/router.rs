@@ -10,7 +10,7 @@ use std::collections::HashMap;
 
 use globset::{Glob, GlobSet, GlobSetBuilder};
 
-use super::config::{Config, Provider};
+use super::config::{Config, ContextGuard, Provider};
 
 /// Router owns the parsed `Config` and the pre-compiled glob matchers.
 /// Designed to live behind an `Arc` and be shared across request handlers.
@@ -19,6 +19,7 @@ pub struct Router {
     port: u16,
     routes: Vec<CompiledRoute>,
     providers: HashMap<String, Provider>,
+    context_guard: Option<ContextGuard>,
 }
 
 #[derive(Debug)]
@@ -71,11 +72,16 @@ impl Router {
             port: config.port,
             routes,
             providers: config.providers,
+            context_guard: config.context_guard,
         })
     }
 
     pub fn port(&self) -> u16 {
         self.port
+    }
+
+    pub fn context_guard(&self) -> Option<ContextGuard> {
+        self.context_guard
     }
 
     /// Resolve a model id to its target provider. First route whose glob

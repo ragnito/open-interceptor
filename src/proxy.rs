@@ -26,7 +26,7 @@ use tokio::net::TcpListener;
 use crate::domain::config::ProviderType;
 use crate::providers;
 use crate::router::Router;
-use crate::services::{health, key_pool::KeyPool, models};
+use crate::services::{context_guard, health, key_pool::KeyPool, models};
 
 /// Shared application state, passed to every handler via Axum's `State`.
 #[derive(Clone)]
@@ -155,6 +155,47 @@ async fn dispatch(
     let effective_model = resolution.effective_model.clone();
     let body_bytes = body.len();
 
+    // Context guard: reject before forwarding if the estimated input tokens
+    // exceed the model's declared context_window * threshold.  Only fires on
+    // /v1/messages (not on count_tokens, which is a measurement endpoint).
+    // Look up context_window by original model name first (alias may declare a
+    // different limit than effective_model), then fall back to effective_model.
+    if endpoint.ends_with("/messages")
+        && let Some(guard) = state.router.context_guard()
+        && let Some(spec) = resolution
+            .provider
+            .models
+            .iter()
+            .find(|m| m.id == model)
+            .or_else(|| {
+                resolution
+                    .provider
+                    .models
+                    .iter()
+                    .find(|m| m.id == effective_model)
+            })
+        && let Some(cw) = spec.context_window
+    {
+        let estimated = context_guard::estimate_input_tokens(&body);
+        if let Some(limit) = context_guard::exceeds(estimated, cw, guard.threshold) {
+            tracing::warn!(
+                model = %model,
+                effective_model = %effective_model,
+                provider = %provider_name,
+                estimated,
+                context_window = cw,
+                threshold = guard.threshold,
+                limit,
+                "context guard tripped — returning prompt-too-long to trigger compaction",
+            );
+            return anthropic_error(
+                StatusCode::BAD_REQUEST,
+                "invalid_request_error",
+                &format!("prompt is too long: {estimated} tokens > {limit} maximum"),
+            );
+        }
+    }
+
     let key_pool = if !passthrough_auth {
         state.key_pools.get(&provider_name).cloned()
     } else {
@@ -170,6 +211,18 @@ async fn dispatch(
         } else {
             None
         };
+
+        // All keys in the pool are currently exhausted — fall through to the
+        // "all keys exhausted" fallback instead of calling the provider with
+        // None, which would produce a misleading "needs an api_key" error.
+        if key_pool.is_some() && api_key.is_none() {
+            tracing::warn!(
+                model = %model,
+                provider = %provider_name,
+                "all API keys exhausted"
+            );
+            break;
+        }
 
         let response = match provider_type {
             ProviderType::AnthropicCompatible => {
@@ -383,16 +436,12 @@ fn map_openai_error(provider_name: &str, err: providers::openai::ForwardError) -
         E::RequestSerialize(e) => anthropic_error(
             StatusCode::INTERNAL_SERVER_ERROR,
             "api_error",
-            &format!(
-                "failed to serialize translated request for `{provider_name}`: {e}"
-            ),
+            &format!("failed to serialize translated request for `{provider_name}`: {e}"),
         ),
         E::ResponseSerialize(e) => anthropic_error(
             StatusCode::INTERNAL_SERVER_ERROR,
             "api_error",
-            &format!(
-                "failed to serialize translated response from `{provider_name}`: {e}"
-            ),
+            &format!("failed to serialize translated response from `{provider_name}`: {e}"),
         ),
         E::RequestParse(e) => anthropic_error(
             StatusCode::BAD_REQUEST,
