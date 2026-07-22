@@ -78,6 +78,7 @@ Marca cada tarea al completarla y commitea junto al cambio. El detalle técnico 
 - [x] **T4.9** Documentar instalación en README: `brew install`, `open-interceptor start`, setup env vars
 - [x] **T4.10** Test end-to-end con instalación limpia ✅
 - [x] **T4.11** Tag `v1.0.0` y release pública ✅
+- [x] **T4.12** Tag `v1.0.1`: installer curl|sh multi-OS, CI release 4 targets, Linux daemon (systemd), repo público ✅
 
 ## Phase 5 — Hardening post-MVP (continuo)
 

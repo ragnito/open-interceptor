@@ -17,15 +17,8 @@ Downloads the prebuilt binary for your platform (macOS arm64/x86_64, Linux x86_6
 Pin a version or change the install dir:
 
 ```bash
-OPEN_INTERCEPTOR_VERSION=v0.1.0 OPEN_INTERCEPTOR_BIN_DIR=/usr/local/bin \
+OPEN_INTERCEPTOR_VERSION=v1.0.1 OPEN_INTERCEPTOR_BIN_DIR=/usr/local/bin \
   sh -c "$(curl -fsSL https://raw.githubusercontent.com/ragnito/open-interceptor/master/install.sh)"
-```
-
-### Homebrew (macOS)
-
-```bash
-brew tap ragnito/tap
-brew install open-interceptor
 ```
 
 ### After installing

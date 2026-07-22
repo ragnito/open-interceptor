@@ -8,7 +8,7 @@
 # (override with OPEN_INTERCEPTOR_BIN_DIR).
 #
 # Environment overrides:
-#   OPEN_INTERCEPTOR_VERSION   tag to install (default: latest, e.g. v0.1.0)
+#   OPEN_INTERCEPTOR_VERSION   tag to install (default: latest, e.g. v1.0.1)
 #   OPEN_INTERCEPTOR_BIN_DIR   install directory (default: $HOME/.local/bin)
 #
 # Supported: macOS (arm64, x86_64) and Linux (x86_64, aarch64).

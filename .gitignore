@@ -25,6 +25,9 @@
 *.log
 ~/.open-interceptor/
 
+# Claude Code scratch (per-project scratch space)
+.claude/
+
 # Generated icon assets (produced by tools/make-icons.sh)
 assets/AppIcon.iconset/
 assets/AppIcon.icns

@@ -1,7 +1,8 @@
 [package]
 name = "open-interceptor"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2024"
+rust-version = "1.85"
 description = "Local proxy that intercepts Claude Code traffic and auto-routes to Anthropic/OpenAI-compatible providers"
 license = "MIT"
 repository = "https://github.com/ragnito/open-interceptor"
