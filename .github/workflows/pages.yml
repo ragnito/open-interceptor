@@ -37,11 +37,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # `enablement: true` turns Pages on via the API if it is not already
-      # enabled, so no manual repository-settings step is needed.
+      # Pages must already be enabled for this repository, with the source set
+      # to "GitHub Actions" (Settings -> Pages). This cannot be automated:
+      # creating a Pages site needs repository-admin rights, and GITHUB_TOKEN
+      # does not have them — `enablement: true` fails with "Resource not
+      # accessible by integration". Fail early with an actionable message
+      # instead of a cryptic one from the action.
+      - name: Check that GitHub Pages is enabled
+        run: |
+          set -euo pipefail
+          code=$(curl -s -o /dev/null -w '%{http_code}' \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            "https://api.github.com/repos/${{ github.repository }}/pages")
+          if [ "$code" = "404" ]; then
+            echo "::error::GitHub Pages is not enabled for this repository. Enable it once at https://github.com/${{ github.repository }}/settings/pages with Source = \"GitHub Actions\", then re-run this workflow."
+            exit 1
+          fi
+          echo "Pages is enabled (HTTP $code)."
+
       - uses: actions/configure-pages@v5
-        with:
-          enablement: true
 
       - name: Assemble site
         run: |
