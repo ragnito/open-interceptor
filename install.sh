@@ -82,6 +82,9 @@ if [ "$version" = "latest" ]; then
 fi
 
 asset="$BIN-$target.tar.gz"
+# The release workflow publishes the checksum as `<name>.sha256` (sibling of
+# the tarball), NOT `<tarball>.sha256`. Keep this in sync with release.yml.
+checksum_asset="$BIN-$target.sha256"
 base="https://github.com/$REPO/releases/download/$version"
 
 info "Installing $BOLD$BIN $version$RESET for $BOLD$target$RESET"
@@ -94,24 +97,27 @@ info "Downloading $asset ..."
 http_dl "$base/$asset" "$tmp/$asset" \
   || err "download failed: $base/$asset"
 
-# Checksum is best-effort: verify when both the file and a hashing tool exist.
-if http_dl "$base/$asset.sha256" "$tmp/$asset.sha256" 2>/dev/null; then
-  expected=$(cut -d' ' -f1 < "$tmp/$asset.sha256")
-  if command -v sha256sum >/dev/null 2>&1; then
-    actual=$(sha256sum "$tmp/$asset" | cut -d' ' -f1)
-  elif command -v shasum >/dev/null 2>&1; then
-    actual=$(shasum -a 256 "$tmp/$asset" | cut -d' ' -f1)
-  else
-    actual=""
-  fi
-  if [ -n "$actual" ]; then
-    [ "$expected" = "$actual" ] || err "checksum mismatch (expected $expected, got $actual)"
-    ok "checksum verified"
-  else
-    warn "no sha256 tool found — skipping checksum verification"
-  fi
+# Every release published by our workflow ships a checksum, so a missing one
+# means something is wrong with the download — fail closed rather than
+# installing an unverified binary.
+http_dl "$base/$checksum_asset" "$tmp/$checksum_asset" \
+  || err "could not download the checksum: $base/$checksum_asset"
+
+expected=$(cut -d' ' -f1 < "$tmp/$checksum_asset")
+if command -v sha256sum >/dev/null 2>&1; then
+  actual=$(sha256sum "$tmp/$asset" | cut -d' ' -f1)
+elif command -v shasum >/dev/null 2>&1; then
+  actual=$(shasum -a 256 "$tmp/$asset" | cut -d' ' -f1)
 else
-  warn "no checksum published for this asset — skipping verification"
+  actual=""
+fi
+
+if [ -n "$actual" ]; then
+  [ "$expected" = "$actual" ] || err "checksum mismatch (expected $expected, got $actual)"
+  ok "checksum verified"
+else
+  # No hashing tool available; we cannot verify. Say so loudly.
+  warn "neither sha256sum nor shasum found — could not verify the download"
 fi
 
 info "Extracting ..."

@@ -4,8 +4,8 @@ name: release
 # Release for the pushed tag. The `install.sh` script downloads these assets.
 #
 # Asset naming (consumed by install.sh — keep in sync):
-#   open-interceptor-<target>.tar.gz
-#   open-interceptor-<target>.tar.gz.sha256
+#   open-interceptor-<target>.tar.gz     the binary archive
+#   open-interceptor-<target>.sha256     its checksum (sibling, not <tarball>.sha256)
 #
 # Targets:
 #   aarch64-apple-darwin        (Apple Silicon macOS)
@@ -45,14 +45,24 @@ jobs:
     name: ${{ matrix.target }}
     needs: create-release
     runs-on: ${{ matrix.os }}
+    # Without an explicit timeout a job with no available runner stays queued
+    # for GitHub's 24 h default before being cancelled — long enough to look
+    # like a hang and to ship a release missing that platform.
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
         include:
           - target: aarch64-apple-darwin
             os: macos-latest
+          # Cross-compiled from the Apple Silicon runner: the Xcode toolchain
+          # ships both SDKs, so `--target x86_64-apple-darwin` produces a valid
+          # Intel binary. Do NOT switch this to `macos-13` — that runner image
+          # is retired, so the job never gets a machine and sits queued until
+          # GitHub cancels it after 24 h (this silently dropped the Intel asset
+          # from the v1.0.1 release).
           - target: x86_64-apple-darwin
-            os: macos-13
+            os: macos-latest
           - target: aarch64-unknown-linux-musl
             os: ubuntu-latest
           - target: x86_64-unknown-linux-musl
@@ -71,3 +81,37 @@ jobs:
           archive: open-interceptor-$target
           checksum: sha256
           token: ${{ secrets.GITHUB_TOKEN }}
+
+  # Fail the release loudly if any platform asset is missing. A partially
+  # uploaded release is worse than a failed one: `install.sh` would 404 for
+  # users on the missing platform while the release looks healthy.
+  verify-release:
+    name: verify-release
+    needs: upload-assets
+    runs-on: ubuntu-latest
+    steps:
+      - name: Assert every platform asset is published
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          echo "Verifying assets for $TAG"
+          assets=$(curl -fsSL \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            "https://api.github.com/repos/${{ github.repository }}/releases/tags/$TAG" \
+            | grep '"name":' | cut -d'"' -f4)
+          echo "Published assets:"
+          echo "$assets" | sed 's/^/  /'
+          missing=0
+          for t in aarch64-apple-darwin x86_64-apple-darwin \
+                   aarch64-unknown-linux-musl x86_64-unknown-linux-musl; do
+            for suffix in .tar.gz .sha256; do
+              want="open-interceptor-$t$suffix"
+              if ! echo "$assets" | grep -qx "$want"; then
+                echo "::error::missing release asset: $want"
+                missing=1
+              fi
+            done
+          done
+          [ "$missing" -eq 0 ] || exit 1
+          echo "All platform assets present."
