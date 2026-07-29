@@ -1,10 +1,10 @@
 #!/bin/sh
 # open-interceptor installer.
 #
-#   curl -fsSL https://raw.githubusercontent.com/ragnito/open-interceptor/master/install.sh | bash
+#   curl -fsSL https://ragnito.github.io/open-interceptor/install.sh | bash
 #
-# Once GitHub Pages is enabled for the repo, the same script is also served
-# from the shorter https://ragnito.github.io/open-interceptor/install.sh
+# (the same script is also served from
+#  https://raw.githubusercontent.com/ragnito/open-interceptor/master/install.sh)
 #
 # Downloads the right prebuilt binary for your OS/arch from the latest GitHub
 # release, verifies its SHA-256 checksum, and installs it to ~/.local/bin

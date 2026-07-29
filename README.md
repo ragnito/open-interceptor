@@ -9,7 +9,7 @@ Set `ANTHROPIC_BASE_URL=http://127.0.0.1:3300` once, then switch providers from 
 ### Quick install (macOS & Linux)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ragnito/open-interceptor/master/install.sh | bash
+curl -fsSL https://ragnito.github.io/open-interceptor/install.sh | bash
 ```
 
 Downloads the prebuilt binary for your platform (macOS arm64/x86_64, Linux x86_64/aarch64), verifies its SHA-256 checksum, and installs it to `~/.local/bin`. The installer prints the next steps.
@@ -18,7 +18,7 @@ Pin a version or change the install dir:
 
 ```bash
 OPEN_INTERCEPTOR_VERSION=v1.0.2 OPEN_INTERCEPTOR_BIN_DIR=/usr/local/bin \
-  bash -c "$(curl -fsSL https://raw.githubusercontent.com/ragnito/open-interceptor/master/install.sh)"
+  bash -c "$(curl -fsSL https://ragnito.github.io/open-interceptor/install.sh)"
 ```
 
 ### After installing

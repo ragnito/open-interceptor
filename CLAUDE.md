@@ -184,15 +184,16 @@ commit: el instalador verifica el checksum en modo *fail-closed* y abortará.
 - `.github/workflows/pages.yml` lo republica en GitHub Pages para dar una URL
   corta (`https://ragnito.github.io/open-interceptor/install.sh`).
 
-  **Pages hay que habilitarlo a mano una vez**: Settings → Pages → Source =
-  *GitHub Actions*. No se puede automatizar: crear el sitio requiere permisos
-  de admin del repo y `GITHUB_TOKEN` no los tiene (`enablement: true` falla con
-  *"Resource not accessible by integration"*; el permiso `pages: write` sirve
-  para desplegar, no para crear el sitio). El workflow comprueba esto al
-  principio y falla con instrucciones si no está activo.
+  **Pages hay que habilitarlo a mano una vez** (ya está hecho en este repo):
+  Settings → Pages → Source = *GitHub Actions*. No se puede automatizar: crear
+  el sitio requiere permisos de admin del repo y `GITHUB_TOKEN` no los tiene
+  (`enablement: true` falla con *"Resource not accessible by integration"*; el
+  permiso `pages: write` sirve para desplegar, no para crear el sitio). El
+  workflow comprueba esto al principio y falla con instrucciones si se
+  desactiva.
 
-  Mientras Pages no esté activo, la URL buena para instalar es la de
-  `raw.githubusercontent.com` — que es la que aparece en el README.
+  Si Pages se cayera, la URL de `raw.githubusercontent.com` sirve el mismo
+  script y es un sustituto válido.
 
 ## Fases del proyecto
 
