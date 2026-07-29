@@ -1,7 +1,10 @@
 #!/bin/sh
 # open-interceptor installer.
 #
-#   curl -fsSL https://raw.githubusercontent.com/ragnito/open-interceptor/master/install.sh | sh
+#   curl -fsSL https://ragnito.github.io/open-interceptor/install.sh | bash
+#
+# (the same script is also served from
+#  https://raw.githubusercontent.com/ragnito/open-interceptor/master/install.sh)
 #
 # Downloads the right prebuilt binary for your OS/arch from the latest GitHub
 # release, verifies its SHA-256 checksum, and installs it to ~/.local/bin

@@ -1,0 +1,63 @@
+name: pages
+
+# Publishes the install script and a small landing page to GitHub Pages so
+# users get a short, stable install URL served straight from this repo:
+#
+#   curl -fsSL https://ragnito.github.io/open-interceptor/install.sh | bash
+#
+# install.sh is copied verbatim from the repo root — the root file stays the
+# single source of truth, this workflow only republishes it.
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'install.sh'
+      - 'site/**'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Never run two deployments at once, and never cancel one midway: a half
+# finished deploy would take the install URL down.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # `enablement: true` turns Pages on via the API if it is not already
+      # enabled, so no manual repository-settings step is needed.
+      - uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
+      - name: Assemble site
+        run: |
+          set -euo pipefail
+          mkdir -p _site
+          cp site/index.html _site/index.html
+          cp install.sh _site/install.sh
+          chmod 644 _site/install.sh
+          # Guard against publishing an install script that is not the one in
+          # the repo (e.g. a bad merge that emptied it).
+          head -n1 _site/install.sh | grep -q '^#!/bin/sh' \
+            || { echo "::error::install.sh does not start with a shebang"; exit 1; }
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - id: deployment
+        uses: actions/deploy-pages@v4

@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>open-interceptor — local proxy that auto-routes Claude Code traffic</title>
+<meta name="description" content="Local proxy that sits between Claude Code and remote providers and auto-routes each request to the right one.">
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #ffffff;
+    --fg: #1a1a1a;
+    --muted: #5c6370;
+    --border: #e3e5e8;
+    --code-bg: #f6f7f9;
+    --accent: #b64f2a;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14161a;
+      --fg: #e8eaed;
+      --muted: #9aa1ac;
+      --border: #2a2e35;
+      --code-bg: #1c1f25;
+      --accent: #e08a5f;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 4rem 1.25rem 6rem;
+    background: var(--bg);
+    color: var(--fg);
+    font: 16px/1.65 ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  main { max-width: 46rem; margin: 0 auto; }
+  h1 { font-size: 2rem; margin: 0 0 .4rem; letter-spacing: -.02em; }
+  .tagline { color: var(--muted); margin: 0 0 2.5rem; font-size: 1.05rem; }
+  h2 { font-size: 1.05rem; margin: 2.5rem 0 .75rem; letter-spacing: .01em; }
+  p { margin: 0 0 1rem; }
+  a { color: var(--accent); }
+  code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  pre {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1rem 1.1rem;
+    overflow-x: auto;
+    font-size: .9rem;
+    margin: 0 0 1rem;
+  }
+  p code {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: .1em .35em;
+    font-size: .9em;
+  }
+  .install { position: relative; }
+  .install pre { padding-right: 5rem; }
+  button {
+    position: absolute; top: .6rem; right: .6rem;
+    background: var(--bg); color: var(--muted);
+    border: 1px solid var(--border); border-radius: 6px;
+    padding: .3rem .6rem; font-size: .8rem; cursor: pointer;
+    font-family: inherit;
+  }
+  button:hover { color: var(--fg); }
+  ul { padding-left: 1.2rem; margin: 0 0 1rem; }
+  li { margin-bottom: .35rem; }
+  table { border-collapse: collapse; width: 100%; font-size: .92rem; }
+  th, td { text-align: left; padding: .5rem .6rem; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: 600; }
+  footer { margin-top: 4rem; padding-top: 1.25rem; border-top: 1px solid var(--border); color: var(--muted); font-size: .9rem; }
+</style>
+</head>
+<body>
+<main>
+  <h1>open-interceptor</h1>
+  <p class="tagline">
+    A local proxy between Claude Code and your model providers. It reads the
+    <code>model</code> field of every request and routes it to the right provider —
+    translating formats when needed.
+  </p>
+
+  <h2>Install</h2>
+  <div class="install">
+    <pre id="cmd">curl -fsSL https://ragnito.github.io/open-interceptor/install.sh | bash</pre>
+    <button onclick="
+      navigator.clipboard.writeText(document.getElementById('cmd').textContent.trim());
+      this.textContent='copied';
+      setTimeout(()=>this.textContent='copy',1500);
+    ">copy</button>
+  </div>
+  <p>
+    Downloads the prebuilt binary for your platform, verifies its SHA-256 checksum,
+    and installs it to <code>~/.local/bin</code>.
+  </p>
+
+  <h2>Supported platforms</h2>
+  <table>
+    <tr><th>OS</th><th>Architectures</th><th>Daemon</th></tr>
+    <tr><td>macOS</td><td>Apple Silicon, Intel</td><td>launchd</td></tr>
+    <tr><td>Linux</td><td>x86_64, aarch64 (static musl)</td><td>systemd user service</td></tr>
+  </table>
+
+  <h2>Then</h2>
+  <pre># 1. Create your config
+mkdir -p ~/.config/open-interceptor
+curl -fsSL https://raw.githubusercontent.com/ragnito/open-interceptor/master/config.yaml.example \
+  -o ~/.config/open-interceptor/config.yaml
+
+# 2. Start the background daemon
+open-interceptor start --install
+open-interceptor status
+
+# 3. Run Claude Code through the proxy
+open-interceptor claude</pre>
+  <p>
+    Inside Claude Code, switch providers with <code>/model &lt;name&gt;</code> — no reload,
+    no wrapper scripts.
+  </p>
+
+  <h2>Why</h2>
+  <ul>
+    <li>One <code>ANTHROPIC_BASE_URL</code>, many providers (Anthropic, DeepSeek, OpenRouter, any OpenAI-compatible endpoint).</li>
+    <li>Anthropic Messages ↔ OpenAI Chat Completions translation, including streaming.</li>
+    <li>SSE relayed chunk by chunk — no buffering of responses.</li>
+    <li>Single static binary, no runtime, small memory footprint.</li>
+  </ul>
+
+  <footer>
+    <a href="https://github.com/ragnito/open-interceptor">Source on GitHub</a> ·
+    <a href="https://github.com/ragnito/open-interceptor/releases">Releases</a> ·
+    MIT licensed
+  </footer>
+</main>
+</body>
+</html>
