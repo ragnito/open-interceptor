@@ -140,6 +140,52 @@ ls -lah "${XDG_STATE_HOME:-$HOME/.local/state}/open-interceptor/"  # logs (traci
 | `Address already in use` | Otra instancia ocupando el puerto | `pkill -f open-interceptor` antes de arrancar |
 | Unit no aparece tras editar | systemd no recargó | `systemctl --user daemon-reload` (lo hace `start --install`) |
 
+## Publicar una release
+
+La distribución es `curl | bash`: el instalador descarga binarios precompilados
+desde GitHub Releases. Para publicar una versión nueva:
+
+```bash
+# 1. Subir la versión del crate (debe coincidir con el tag)
+#    Cargo.toml: version = "X.Y.Z"  → luego `cargo update -p open-interceptor --offline`
+# 2. Verificar en local
+cargo fmt --all --check && cargo clippy --all-targets -- -D warnings && cargo test
+# 3. Commit, tag y push (el tag dispara .github/workflows/release.yml)
+git tag -a vX.Y.Z -m "open-interceptor vX.Y.Z" && git push origin master vX.Y.Z
+```
+
+El workflow compila 4 targets y sube 8 assets (4 `.tar.gz` + 4 `.sha256`):
+
+| Target | Runner |
+|--------|--------|
+| `aarch64-apple-darwin` | `macos-latest` (nativo) |
+| `x86_64-apple-darwin` | `macos-latest` (**cross-compilado**) |
+| `x86_64-unknown-linux-musl` | `ubuntu-latest` (estático) |
+| `aarch64-unknown-linux-musl` | `ubuntu-latest` (estático) |
+
+**No usar `macos-13`** para el target Intel: esa imagen de runner está retirada,
+el job se queda encolado 24 h y GitHub lo cancela — el release se publica sin el
+binario de Mac Intel y *parece* correcto. El job `verify-release` existe justo
+para que eso falle en rojo en vez de pasar desapercibido.
+
+### Nombres de assets (contrato con `install.sh`)
+
+```
+open-interceptor-<target>.tar.gz     el binario
+open-interceptor-<target>.sha256     su checksum (hermano, NO <tarball>.sha256)
+```
+
+Si cambias este naming en `release.yml`, actualiza `install.sh` en el mismo
+commit: el instalador verifica el checksum en modo *fail-closed* y abortará.
+
+### Instalador y Pages
+
+- `install.sh` (raíz) es la única fuente de verdad.
+- `.github/workflows/pages.yml` lo republica en GitHub Pages para dar una URL
+  corta. Requiere que Pages esté habilitado en el repo con source
+  **GitHub Actions** (Settings → Pages); si no lo está, el job
+  `configure-pages` falla.
+
 ## Fases del proyecto
 
 Ver `TODO.md`. Estamos siguiendo este orden estricto:
