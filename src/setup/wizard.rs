@@ -7,7 +7,7 @@
 //! the alternate screen.
 
 use std::collections::HashMap;
-use std::io::{self, Stdout};
+use std::io::{self, IsTerminal, Stdout};
 
 use anyhow::Context;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
@@ -188,6 +188,19 @@ impl App {
 /// The terminal is restored before returning in every path, including panics
 /// upstream of the caller's error handling.
 pub fn run() -> anyhow::Result<Option<Outcome>> {
+    // Without a terminal the wizard cannot read a single key. Say so plainly:
+    // the raw-mode failure underneath surfaces as "Device not configured",
+    // which tells the user nothing about what to do instead.
+    if !std::io::stdin().is_terminal() {
+        anyhow::bail!(
+            "`setup` needs an interactive terminal, and this one has no keyboard attached.\n\n\
+             If you piped the installer (curl | bash), run the wizard yourself:\n  \
+             open-interceptor setup\n\n\
+             To configure without a terminal, write the config by hand:\n  \
+             https://github.com/ragnito/open-interceptor#install"
+        );
+    }
+
     let mut terminal = enter().context("could not switch the terminal to raw mode")?;
     let result = event_loop(&mut terminal);
     // Restore first, propagate second: an error message is useless if the

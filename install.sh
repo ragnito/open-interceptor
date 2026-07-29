@@ -99,7 +99,7 @@ if [ "$version" = "latest" ]; then
 
   [ -n "$version" ] || err "could not resolve the latest release tag.
   Check https://github.com/$REPO/releases, or pin a version:
-    OPEN_INTERCEPTOR_VERSION=v1.0.3 sh install.sh"
+    OPEN_INTERCEPTOR_VERSION=v1.0.4 sh install.sh"
 fi
 
 asset="$BIN-$target.tar.gz"

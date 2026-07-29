@@ -17,7 +17,7 @@ Downloads the prebuilt binary for your platform (macOS arm64/x86_64, Linux x86_6
 Pin a version or change the install dir:
 
 ```bash
-OPEN_INTERCEPTOR_VERSION=v1.0.3 OPEN_INTERCEPTOR_BIN_DIR=/usr/local/bin \
+OPEN_INTERCEPTOR_VERSION=v1.0.4 OPEN_INTERCEPTOR_BIN_DIR=/usr/local/bin \
   bash -c "$(curl -fsSL https://ragnito.github.io/open-interceptor/install.sh)"
 ```
 
