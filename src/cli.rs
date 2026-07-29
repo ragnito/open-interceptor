@@ -30,6 +30,14 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
+    /// Guided first-run setup: pick providers, enter credentials, and start
+    /// the daemon. Writes `~/.config/open-interceptor/config.yaml`.
+    Setup {
+        /// Overwrite an existing config instead of leaving it alone.
+        #[arg(long)]
+        force: bool,
+    },
+
     /// Run the proxy in the foreground. This is what the service manager
     /// (launchd/systemd) executes in production; for local development just
     /// invoke it directly.
@@ -95,6 +103,7 @@ pub enum Command {
 /// Entrypoint called from `main` after parsing args.
 pub async fn dispatch(cmd: Command) -> anyhow::Result<()> {
     match cmd {
+        Command::Setup { force } => crate::setup::run(force).await,
         Command::Run { config } => run(&config).await,
         Command::Start { install, binary } => do_start(install, binary),
         Command::Stop => daemon::stop(),
@@ -180,6 +189,14 @@ fn latest_log_file(log_dir: &Path) -> Option<PathBuf> {
 /// Foreground run: load config, build router, start the Axum server.
 async fn run(config_path: &Path) -> anyhow::Result<()> {
     let path = expand_tilde(config_path);
+    // A missing config is the first-run case, not a real failure — point at
+    // the wizard instead of a bare "No such file or directory".
+    if !path.exists() {
+        anyhow::bail!(
+            "no config at {}\n\nRun the guided setup to create one:\n  open-interceptor setup",
+            path.display()
+        );
+    }
     let config = crate::services::config::ConfigService::load(&path)
         .map_err(|e| anyhow::anyhow!("failed to load config from {}: {e}", path.display()))?;
 
@@ -202,6 +219,16 @@ async fn run(config_path: &Path) -> anyhow::Result<()> {
 async fn ensure_daemon_running() -> anyhow::Result<()> {
     if daemon::probe() {
         return Ok(());
+    }
+
+    // Installing the service without a config produces a daemon that starts
+    // and immediately dies. Send first-timers to the wizard instead.
+    let config = daemon::config_path();
+    if !config.exists() {
+        anyhow::bail!(
+            "no config at {}\n\nRun the guided setup first:\n  open-interceptor setup",
+            config.display()
+        );
     }
 
     eprintln!("open-interceptor: proxy not running — starting...");

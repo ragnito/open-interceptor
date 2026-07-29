@@ -25,7 +25,7 @@ pub struct Config {
     /// When set, the proxy enforces a context limit per model and returns a
     /// 400 "prompt is too long" error before forwarding — which causes Claude
     /// Code to trigger compaction.  Opt-in: omit or set to `null` to disable.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_guard: Option<ContextGuard>,
 }
 
@@ -44,32 +44,32 @@ pub struct Provider {
     /// API key, with `${VAR}` expansion already applied at load time.
     /// Optional because `passthrough_auth: true` plus an OAuth client
     /// makes the proxy not own a key at all.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_key: Option<String>,
 
     /// Multiple API keys for round-robin rotation and automatic failover.
     /// When set alongside `api_key`, both are merged (deduplicated order
     /// preserved). When neither is set, the provider must use
     /// `passthrough_auth` or every request will fail with MissingApiKey.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_keys: Option<Vec<String>>,
 
     /// Key rotation strategy. `round_robin` rotates on every request;
     /// `failover` pins to the first key and only switches on rate-limit
     /// (HTTP 429 or quota-exhausted response).
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key_strategy: Option<KeyStrategy>,
 
     /// When true, the proxy forwards the client's auth header unchanged
     /// to upstream — used to keep a Pro/Max subscription session alive
     /// instead of substituting with `api_key`.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_false")]
     pub passthrough_auth: bool,
 
     /// Static list of models this provider exposes, surfaced via the
     /// `/v1/models` endpoint. Optional — empty means the proxy will probe
     /// the provider's own `/v1/models` and cache the result (dynamic fetch).
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub models: Vec<ModelSpec>,
 }
 
@@ -99,10 +99,10 @@ impl Provider {
 pub struct ModelSpec {
     pub id: String,
     /// Total context window in tokens.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_window: Option<u32>,
     /// Maximum output tokens the model supports.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_output_tokens: Option<u32>,
 }
 
@@ -134,7 +134,7 @@ pub struct Route {
 
     /// Optional model-id rewrites applied before dispatching to the
     /// upstream provider.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub remap: HashMap<String, String>,
 }
 
@@ -152,6 +152,12 @@ pub struct ContextGuard {
     /// Default: 0.85 (fire at 85% of the declared context window).
     #[serde(default = "default_guard_threshold")]
     pub threshold: f32,
+}
+
+/// `skip_serializing_if` helper: omit `passthrough_auth` when it is the
+/// default (false), so generated configs stay free of noise.
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 fn default_guard_threshold() -> f32 {

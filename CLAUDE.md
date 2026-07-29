@@ -140,6 +140,51 @@ ls -lah "${XDG_STATE_HOME:-$HOME/.local/state}/open-interceptor/"  # logs (traci
 | `Address already in use` | Otra instancia ocupando el puerto | `pkill -f open-interceptor` antes de arrancar |
 | Unit no aparece tras editar | systemd no recargó | `systemctl --user daemon-reload` (lo hace `start --install`) |
 
+## Setup guiado (`open-interceptor setup`)
+
+Wizard de primer arranque en `src/setup/`. Sustituye al copia-pega de crear
+`config.yaml` a mano y acordarse de instalar el daemon.
+
+| Archivo | Rol |
+|---------|-----|
+| `src/setup/catalog.rs` | Catálogo curado de providers → `(providers, routes)`. **Los model ids se copian de `config.yaml.example`, no se inventan**: un id equivocado solo falla más tarde, en request. |
+| `src/setup/wizard.rs` | Pantallas ratatui (bienvenida → selección → credenciales → confirmación). Solo *recoge* decisiones. |
+| `src/setup/mod.rs` | Ensambla el `Config`, lo escribe con permisos `0600`, lo revalida cargándolo, y opcionalmente instala+arranca el daemon. |
+
+Reglas al tocarlo:
+
+1. **La TUI no escribe nada.** El wizard devuelve un `Outcome`; el I/O ocurre
+   después de restaurar el terminal, para que un error se vea en el scrollback
+   en lugar de desaparecer con la pantalla alternativa.
+2. **El orden de las rutas importa** (gana la primera que casa): las rutas
+   específicas van en orden de catálogo y el comodín `*` al final. Solo se
+   añade comodín si el usuario configuró `anthropic`.
+3. **Nunca escribir `api_key: ""`** — una clave vacía parece configurada y
+   falla en cada request. Se omite el campo (`None`).
+4. El config generado usa `skip_serializing_if` en los campos opcionales para
+   que salga limpio y editable a mano.
+
+`ratatui` ya estaba en `Cargo.toml` (sin usar) y reexporta `crossterm`, así que
+el wizard no añadió dependencias.
+
+### Probar la TUI
+
+Los tests unitarios cubren la máquina de estados, pero para verificar que el
+binario funciona de verdad hay que conducirlo por un pty:
+
+```bash
+# Ver scratchpad drive_wizard.py: lanza `setup --force` con HOME temporal,
+# envía pulsaciones y comprueba el config resultante y sus permisos.
+python3 drive_wizard.py
+```
+
+Y la rama interactiva de `install.sh` necesita terminal de control (`pty.openpty`
+no basta — hay que usar `script`):
+
+```bash
+printf 'n\n' | HOME=$(mktemp -d) script -q /dev/null sh install.sh
+```
+
 ## Publicar una release
 
 La distribución es `curl | bash`: el instalador descarga binarios precompilados

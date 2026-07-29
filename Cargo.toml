@@ -1,6 +1,6 @@
 [package]
 name = "open-interceptor"
-version = "1.0.2"
+version = "1.0.3"
 edition = "2024"
 rust-version = "1.85"
 description = "Local proxy that intercepts Claude Code traffic and auto-routes to Anthropic/OpenAI-compatible providers"

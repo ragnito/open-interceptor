@@ -10,4 +10,5 @@ pub mod providers;
 pub mod proxy;
 pub mod router;
 pub mod services;
+pub mod setup;
 pub mod translate;

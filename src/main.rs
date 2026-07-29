@@ -17,6 +17,7 @@ mod providers;
 mod proxy;
 mod router;
 mod services;
+mod setup;
 mod translate;
 
 #[tokio::main]

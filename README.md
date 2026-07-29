@@ -17,26 +17,48 @@ Downloads the prebuilt binary for your platform (macOS arm64/x86_64, Linux x86_6
 Pin a version or change the install dir:
 
 ```bash
-OPEN_INTERCEPTOR_VERSION=v1.0.2 OPEN_INTERCEPTOR_BIN_DIR=/usr/local/bin \
+OPEN_INTERCEPTOR_VERSION=v1.0.3 OPEN_INTERCEPTOR_BIN_DIR=/usr/local/bin \
   bash -c "$(curl -fsSL https://ragnito.github.io/open-interceptor/install.sh)"
 ```
 
 ### After installing
 
+The installer offers to run the guided setup straight away. You can also start it yourself at any time:
+
 ```bash
-# 1. Create your config
+open-interceptor setup
+```
+
+It walks you through everything in one go:
+
+1. **Pick your providers** — Anthropic (Pro/Max subscription, no API key), OpenCode Go, OpenAI, or any OpenAI-compatible endpoint.
+2. **Enter credentials** — keys are masked as you type, and you can write `${MY_ENV_VAR}` to keep them in your environment instead.
+3. **Start the daemon** — installs the launchd/systemd service and waits until the proxy actually answers.
+
+The config lands in `~/.config/open-interceptor/config.yaml` (owner-only, since it may hold API keys) and is plain YAML you can edit afterwards. Re-run with `--force` to regenerate it.
+
+Then just:
+
+```bash
+open-interceptor claude
+```
+
+<details>
+<summary>Prefer to configure it by hand?</summary>
+
+```bash
 mkdir -p ~/.config/open-interceptor
 cp config.yaml.example ~/.config/open-interceptor/config.yaml
 # edit it with your providers / API keys
 
-# 2. Start the background daemon (launchd on macOS, systemd user service on Linux)
 open-interceptor start --install
 open-interceptor status
 
-# 3. Point Claude Code at the proxy — add to ~/.zshrc / ~/.bashrc
+# add to ~/.zshrc / ~/.bashrc
 export ANTHROPIC_BASE_URL=http://127.0.0.1:3300
 export CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1
 ```
+</details>
 
 ### Build from source
 
@@ -84,6 +106,8 @@ claude
 ### CLI reference
 
 ```
+open-interceptor setup                    guided first-run setup (providers + daemon)
+open-interceptor setup --force            re-run it and overwrite the config
 open-interceptor claude [args...]         run claude with proxy auto-started
 open-interceptor run --config <path>      foreground server
 open-interceptor start --install          install + start the background daemon

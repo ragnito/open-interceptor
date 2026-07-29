@@ -76,12 +76,30 @@ esac
 version="${OPEN_INTERCEPTOR_VERSION:-latest}"
 if [ "$version" = "latest" ]; then
   info "Resolving latest release..."
-  # Parse the tag_name from the GitHub API without requiring jq.
-  version=$(
-    http_get "https://api.github.com/repos/$REPO/releases/latest" \
-      | grep '"tag_name"' | head -n1 | cut -d'"' -f4
-  )
-  [ -n "$version" ] || err "could not resolve the latest release tag (is the repo published with a release?)"
+  version=''
+
+  # Preferred: follow the /releases/latest redirect and read the tag out of
+  # the final URL. Unlike api.github.com this is not rate limited, which
+  # matters for an installer people run from shared IPs and CI.
+  if command -v curl >/dev/null 2>&1; then
+    effective=$(curl -fsSLI -o /dev/null -w '%{url_effective}' \
+      "https://github.com/$REPO/releases/latest" 2>/dev/null) || effective=''
+    case "$effective" in
+      */releases/tag/*) version="${effective##*/tag/}" ;;
+    esac
+  fi
+
+  # Fallback: the JSON API (parsed without jq).
+  if [ -z "$version" ]; then
+    version=$(
+      http_get "https://api.github.com/repos/$REPO/releases/latest" 2>/dev/null \
+        | grep '"tag_name"' | head -n1 | cut -d'"' -f4
+    ) || version=''
+  fi
+
+  [ -n "$version" ] || err "could not resolve the latest release tag.
+  Check https://github.com/$REPO/releases, or pin a version:
+    OPEN_INTERCEPTOR_VERSION=v1.0.3 sh install.sh"
 fi
 
 asset="$BIN-$target.tar.gz"
@@ -137,9 +155,8 @@ ok "installed to $BOLD$bin_dir/$BIN$RESET"
 
 # ---- post-install guidance ------------------------------------------------
 echo
-printf '%sNext steps%s\n' "$BOLD" "$RESET"
 
-# 1) PATH check
+# PATH check first: everything below assumes the binary is reachable.
 case ":$PATH:" in
   *":$bin_dir:"*) : ;;
   *)
@@ -150,27 +167,53 @@ case ":$PATH:" in
     ;;
 esac
 
-# 2) config
 cfg="$HOME/.config/open-interceptor/config.yaml"
-if [ ! -f "$cfg" ]; then
-  echo "  1. Create your config:"
-  echo "       mkdir -p $HOME/.config/open-interceptor"
-  echo "       # download the example and edit it with your providers/API keys:"
-  echo "       curl -fsSL https://raw.githubusercontent.com/$REPO/$version/config.yaml.example \\"
-  echo "         -o $cfg"
-else
+
+if [ -f "$cfg" ]; then
   ok "config found at $cfg"
+  echo
+  printf '%sNext steps%s\n' "$BOLD" "$RESET"
+  echo "  Restart the daemon to pick up the new binary:"
+  echo "       $BIN stop && $BIN start"
+  echo "  Then run Claude Code through the proxy:"
+  echo "       $BIN claude"
+  echo
+  ok "done"
+  exit 0
 fi
 
-# 3) daemon + Claude Code
-echo "  2. Start the background daemon (launchd on macOS, systemd on Linux):"
-echo "       $BIN start --install"
-echo "       $BIN status"
-echo "  3. Point Claude Code at the proxy (add to your shell profile):"
-echo "       export ANTHROPIC_BASE_URL=http://127.0.0.1:3300"
-echo "       export CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1"
+# First install: offer the guided setup. Under `curl | sh` this script's stdin
+# is the pipe, not the keyboard, so the prompt and the wizard both have to read
+# from the controlling terminal explicitly.
+#
+# `[ -r /dev/tty ]` is not enough: the node exists in containers and CI runners
+# that have no controlling terminal, and opening it there fails with ENXIO.
+# Actually open it (discarding the error) before offering anything.
+if { : < /dev/tty; } 2>/dev/null; then
+  printf '%sRun the guided setup now?%s [Y/n] ' "$BOLD" "$RESET"
+  answer=''
+  # A failed read means the terminal went away mid-prompt; treat it as "no".
+  # An empty answer only counts as "yes" when the user pressed Enter.
+  if read -r answer < /dev/tty; then
+    case "$answer" in
+      '' | y | Y | yes | YES)
+        echo
+        # exec: hand the terminal to the wizard and keep its exit code.
+        exec "$bin_dir/$BIN" setup < /dev/tty
+        ;;
+    esac
+  fi
+  echo
+fi
+
+printf '%sNext steps%s\n' "$BOLD" "$RESET"
+echo "  1. Configure providers and start the daemon (guided):"
+echo "       $BIN setup"
 echo
-echo "  Or just run Claude through the proxy in one shot:"
+echo "  2. Then run Claude Code through the proxy:"
 echo "       $BIN claude"
+echo
+echo "  Prefer to configure it by hand? See"
+echo "       https://github.com/$REPO#install"
 echo
 ok "done"
