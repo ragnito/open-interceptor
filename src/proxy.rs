@@ -417,7 +417,7 @@ fn map_openai_error(provider_name: &str, err: providers::openai::ForwardError) -
                 "api_error",
                 &format!(
                     "upstream `{provider_name}` returned {status}: {}",
-                    &body.chars().take(300).collect::<String>()
+                    body.chars().take(300).collect::<String>()
                 ),
             )
         }
