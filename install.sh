@@ -189,7 +189,16 @@ fi
 # `[ -r /dev/tty ]` is not enough: the node exists in containers and CI runners
 # that have no controlling terminal, and opening it there fails with ENXIO.
 # Actually open it (discarding the error) before offering anything.
-if { : < /dev/tty; } 2>/dev/null; then
+#
+# The probe runs in a subshell on purpose. Under dash (`/bin/sh` on Ubuntu) a
+# failed redirection on a compound command is fatal: the shell exits with
+# status 2 right there, before the `if` gets a chance to guard it, and the
+# `2>/dev/null` swallows the message. That killed every non-interactive install
+# (ssh without -t, CI, `curl | ssh`) right after the binary was already
+# installed — exit 2 with no "Next steps", which reads as a failed install.
+# A subshell confines that failure to the child, where a non-zero status is
+# just a false condition.
+if ( : < /dev/tty ) 2>/dev/null; then
   printf '%sRun the guided setup now?%s [Y/n] ' "$BOLD" "$RESET"
   answer=''
   # A failed read means the terminal went away mid-prompt; treat it as "no".
